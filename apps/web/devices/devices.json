@@ -1,0 +1,15 @@
+{
+  "defaultDeviceId": "shutter-dev-001",
+  "devices": [
+    {
+      "deviceId": "shutter-dev-001",
+      "label": "Internal Test Shutter",
+      "status": "manual_mvp",
+      "firmwareVersion": null,
+      "commandTopic": "shutters/shutter-dev-001/commands",
+      "statusTopic": "shutters/shutter-dev-001/status",
+      "brokerProfile": "hivemq-dev",
+      "createdAt": "2026-04-23T00:00:00.000Z"
+    }
+  ]
+}

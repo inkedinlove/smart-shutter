@@ -1,0 +1,22 @@
+# Smart Shutter MVP Test Checklist
+
+- Device powers on.
+- Device starts in `BOOTING`.
+- WiFi connects.
+- `deviceMode` reaches `WIFI_CONNECTING`.
+- MQTT connects.
+- `deviceMode` reaches `MQTT_CONNECTING`, then `READY`.
+- Website loads.
+- 0% command publishes.
+- 25% command publishes.
+- 50% command publishes.
+- 75% command publishes.
+- 100% command publishes.
+- STOP command publishes.
+- Motor moves.
+- `deviceMode` changes to `MOVING` while the motor is running.
+- Status updates in the dashboard.
+- Direction is correct.
+- If direction is reversed, set `INVERT_DIRECTION` to `true` in firmware and reflash.
+- If movement is too slow, loud, or rough, tune `MOTOR_MAX_SPEED` and `MOTOR_ACCELERATION`.
+- Optional local fallback: with `ENABLE_LOCAL_FALLBACK_WEB true`, confirm `/status`, `/set?value=50`, and `/stop` work on the local page.

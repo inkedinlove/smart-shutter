@@ -1,0 +1,18 @@
+{
+  "name": "Smart Shutter",
+  "version": "0.1.0-dev",
+  "home_assistant_domain": "smart_shutter",
+  "funding_url": "",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        {
+          "path": "/firmware/releases/0.1.0-dev/smart-shutter-0.1.0-dev-merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

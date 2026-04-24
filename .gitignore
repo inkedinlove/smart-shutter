@@ -1,0 +1,3 @@
+.arduino-build/
+firmware/esp32-shutter/build/
+apps/web/public/firmware/releases/

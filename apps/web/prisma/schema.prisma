@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Device {
+  id                   String                @id @default(cuid())
+  deviceId             String                @unique
+  label                String
+  status               String                @default("unprovisioned")
+  firmwareVersion      String?
+  mqttCommandTopic     String
+  mqttStatusTopic      String
+  brokerProfile        String                @default("hivemq-dev")
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  updateEvents         DeviceUpdateEvent[]
+  provisioningSessions ProvisioningSession[]
+}
+
+model FirmwareRelease {
+  id         String   @id @default(cuid())
+  version    String   @unique
+  channel    String   @default("stable")
+  board      String   @default("esp32")
+  artifactUrl String
+  sha256     String
+  sizeBytes  Int?
+  notes      String?
+  isActive   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}
+
+model DeviceUpdateEvent {
+  id                  String   @id @default(cuid())
+  deviceId            String
+  firmwareVersionFrom String?
+  firmwareVersionTo   String
+  status              String
+  detail              String?
+  createdAt           DateTime @default(now())
+  device              Device   @relation(fields: [deviceId], references: [deviceId], onDelete: Cascade)
+
+  @@index([deviceId, createdAt])
+}
+
+model ProvisioningSession {
+  id          String    @id @default(cuid())
+  deviceId    String?
+  pairingCode String    @unique
+  status      String    @default("created")
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+  device      Device?   @relation(fields: [deviceId], references: [deviceId], onDelete: SetNull)
+
+  @@index([deviceId])
+  @@index([expiresAt])
+}
