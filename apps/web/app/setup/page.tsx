@@ -28,9 +28,9 @@ export default async function SetupPage() {
       <section className="dashboard-panel rounded-[1.2rem] p-6 sm:p-8 lg:p-10">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-cyan-200">
-              <span className="h-1.5 w-1.5 rounded-full bg-cyan-300" />
-              Setup Console
+            <div className="inline-flex items-center gap-2 rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-amber-100">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-200" />
+              Internal Setup Console
             </div>
             <h1 className="max-w-3xl text-4xl font-semibold tracking-tight text-white sm:text-[2.8rem]">
               Device setup in one place.
@@ -96,6 +96,12 @@ export default async function SetupPage() {
 
       <section className="dashboard-panel rounded-[1.2rem] border border-amber-300/20 bg-amber-300/8 p-6 sm:p-8">
           <div className="text-xs font-semibold uppercase tracking-[0.3em] text-amber-100">
+            Internal admin
+          </div>
+          <p className="mt-3 max-w-4xl text-sm leading-7 text-amber-50/90">
+            This page is for internal provisioning and firmware preparation only.
+          </p>
+          <div className="mt-5 text-xs font-semibold uppercase tracking-[0.3em] text-amber-100">
             Keep secrets local
           </div>
           <p className="mt-3 max-w-4xl text-sm leading-7 text-amber-50/90">

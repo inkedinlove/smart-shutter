@@ -4,18 +4,32 @@
 // WiFi and MQTT Credentials
 // ---------------------------------------------------------------------------
 
-constexpr const char* WIFI_SSID = "YOUR_WIFI_SSID";
-constexpr const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+// Leave WiFi blank to use factory setup mode with a local setup AP and portal.
+constexpr const char* WIFI_SSID = "";
+constexpr const char* WIFI_PASSWORD = "";
 
 constexpr const char* MQTT_HOST = "YOUR_HIVEMQ_HOST";
 constexpr int MQTT_PORT = 8883;
 constexpr const char* MQTT_USERNAME = "YOUR_HIVEMQ_USERNAME";
 constexpr const char* MQTT_PASSWORD = "YOUR_HIVEMQ_PASSWORD";
+constexpr const char* MQTT_CLIENT_ID = "";
 
+// Leave this blank to derive a unique fallback device ID from the ESP32 MAC.
 constexpr const char* DEVICE_ID = "shutter-dev-001";
 #define FIRMWARE_VERSION "0.1.0-dev"
-constexpr const char* COMMAND_TOPIC = "shutters/shutter-dev-001/commands";
-constexpr const char* STATUS_TOPIC = "shutters/shutter-dev-001/status";
+constexpr const char* COMMAND_TOPIC = "shutters/{deviceId}/commands";
+constexpr const char* STATUS_TOPIC = "shutters/{deviceId}/status";
+
+// ---------------------------------------------------------------------------
+// Factory Setup Mode
+// ---------------------------------------------------------------------------
+
+// Keep this enabled for factory-flashed devices so they can start a local
+// setup network when WiFi is blank or the saved network cannot be reached.
+#define ENABLE_FACTORY_SETUP_MODE true
+#define SETUP_AP_SSID_PREFIX "SmartShutter-"
+#define SETUP_AP_PASSWORD ""
+#define SETUP_PORTAL_TIMEOUT_MS 300000
 
 // ---------------------------------------------------------------------------
 // OTA Update Settings

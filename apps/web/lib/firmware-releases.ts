@@ -18,6 +18,7 @@ import type {
 
 const DEFAULT_FIRMWARE_CHANNEL = "stable";
 const DEFAULT_FIRMWARE_BOARD = "esp32";
+const MAX_FIRMWARE_SIZE_BYTES = 16 * 1024 * 1024;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 
 const FALLBACK_RELEASES: FirmwareReleaseRecord[] = [
@@ -129,14 +130,18 @@ function normalizeArtifactUrl(value: unknown): string {
   try {
     const parsedUrl = new URL(artifactUrl);
 
-    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    if (parsedUrl.protocol !== "https:") {
       throw new Error("unsupported protocol");
+    }
+
+    if (parsedUrl.username || parsedUrl.password) {
+      throw new Error("embedded credentials are not allowed");
     }
 
     return artifactUrl;
   } catch {
     throw new FirmwareReleaseError(
-      "The `artifactUrl` field must be a valid http or https URL.",
+      "The `artifactUrl` field must be a valid HTTPS URL without embedded credentials.",
     );
   }
 }
@@ -161,6 +166,12 @@ function normalizeSizeBytes(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     throw new FirmwareReleaseError(
       "The `sizeBytes` field must be a non-negative integer when provided.",
+    );
+  }
+
+  if (value > MAX_FIRMWARE_SIZE_BYTES) {
+    throw new FirmwareReleaseError(
+      `The \`sizeBytes\` field must be ${MAX_FIRMWARE_SIZE_BYTES.toLocaleString()} bytes or smaller.`,
     );
   }
 
@@ -242,7 +253,8 @@ export async function createFirmwareCheckResponse(
   },
 ): Promise<FirmwareCheckResponse> {
   const channel = getFirmwareChannel();
-  const latestRelease = await getLatestFirmwareRelease(channel);
+  const deviceBoard = device.board ?? DEFAULT_FIRMWARE_BOARD;
+  const latestRelease = await getLatestFirmwareRelease(channel, deviceBoard);
   const currentVersion = options?.currentVersion ?? device.firmwareVersion ?? null;
 
   return {
@@ -250,7 +262,7 @@ export async function createFirmwareCheckResponse(
     currentVersion,
     latestVersion: latestRelease?.version ?? null,
     updateAvailable: latestRelease !== null && currentVersion !== latestRelease.version,
-    board: latestRelease?.board ?? null,
+    board: latestRelease?.board ?? deviceBoard,
     channel,
     releaseNotes: latestRelease?.notes ?? null,
     artifactUrl:
@@ -269,7 +281,8 @@ export async function createFirmwareManifestResponse(
   },
 ): Promise<FirmwareManifestResponse> {
   const channel = getFirmwareChannel();
-  const latestRelease = await getLatestFirmwareRelease(channel);
+  const deviceBoard = device.board ?? DEFAULT_FIRMWARE_BOARD;
+  const latestRelease = await getLatestFirmwareRelease(channel, deviceBoard);
   const currentVersion = options?.currentVersion ?? device.firmwareVersion ?? null;
   const updateAvailable =
     latestRelease !== null && currentVersion !== latestRelease.version;
@@ -279,7 +292,7 @@ export async function createFirmwareManifestResponse(
     updateAvailable,
     currentVersion,
     latestVersion: latestRelease?.version ?? null,
-    board: latestRelease?.board ?? null,
+    board: latestRelease?.board ?? deviceBoard,
     channel,
     artifactUrl:
       updateAvailable &&

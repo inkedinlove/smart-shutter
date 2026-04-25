@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { Device as PrismaDevice } from "@prisma/client";
+import type { Device as PrismaDevice, UserProfile as PrismaUserProfile } from "@prisma/client";
 
 import { getDb, isDatabaseConfigured } from "@/lib/db";
 import {
@@ -10,15 +10,28 @@ import {
   type RegisteredDevice,
 } from "@/lib/devices";
 
-function mapDatabaseDevice(device: PrismaDevice): RegisteredDevice {
+type DatabaseDeviceWithOwner = PrismaDevice & {
+  ownerProfile?: Pick<PrismaUserProfile, "id" | "displayName" | "email"> | null;
+};
+
+function mapDatabaseDevice(device: DatabaseDeviceWithOwner): RegisteredDevice {
   return {
     deviceId: device.deviceId,
     label: device.label,
+    board: device.board as RegisteredDevice["board"],
     status: device.status,
     firmwareVersion: device.firmwareVersion,
     commandTopic: device.mqttCommandTopic,
     statusTopic: device.mqttStatusTopic,
     brokerProfile: device.brokerProfile as RegisteredDevice["brokerProfile"],
+    ownerProfileId: device.ownerProfileId,
+    ownerProfile: device.ownerProfile
+      ? {
+          profileId: device.ownerProfile.id,
+          displayName: device.ownerProfile.displayName,
+          email: device.ownerProfile.email,
+        }
+      : null,
     createdAt: device.createdAt.toISOString(),
   };
 }
@@ -32,6 +45,15 @@ async function readDatabaseDevices(): Promise<RegisteredDevice[] | null> {
 
   try {
     const devices = await db.device.findMany({
+      include: {
+        ownerProfile: {
+          select: {
+            id: true,
+            displayName: true,
+            email: true,
+          },
+        },
+      },
       orderBy: {
         createdAt: "asc",
       },
@@ -70,6 +92,15 @@ export async function getRegisteredDeviceById(
       const device = await db.device.findUnique({
         where: {
           deviceId: normalizedDeviceId,
+        },
+        include: {
+          ownerProfile: {
+            select: {
+              id: true,
+              displayName: true,
+              email: true,
+            },
+          },
         },
       });
 

@@ -9,17 +9,11 @@ import {
 } from "react";
 
 import AppNav from "@/app/_components/app-nav";
-import { fetchWithShortTimeout } from "@/lib/client-fetch";
+import { fetchWithShortTimeout, readApiData } from "@/lib/client-fetch";
 import type { FirmwareReleaseInput, FirmwareReleaseRecord } from "@/lib/firmware";
 
 type ReleasesResponse = {
   releases: FirmwareReleaseRecord[];
-};
-
-type CreateReleaseResponse = {
-  ok?: boolean;
-  error?: string;
-  release?: FirmwareReleaseRecord;
 };
 
 type ReleaseFormState = {
@@ -68,6 +62,14 @@ function isReleasesResponse(value: unknown): value is ReleasesResponse {
   );
 }
 
+function isCreateReleaseResponseData(
+  value: unknown,
+): value is {
+  release: FirmwareReleaseRecord;
+} {
+  return isRecord(value) && isFirmwareReleaseRecord(value.release);
+}
+
 function formatTimestamp(value: string): string {
   const parsed = new Date(value);
 
@@ -114,19 +116,11 @@ export default function FirmwareReleasesPage() {
         cache: "no-store",
         timeoutMessage: "Loading firmware releases timed out.",
       });
-      const payload = (await response.json()) as unknown;
-
-      if (!response.ok) {
-        throw new Error(
-          isRecord(payload) && typeof payload.error === "string"
-            ? payload.error
-            : "Unable to load firmware releases.",
-        );
-      }
-
-      if (!isReleasesResponse(payload)) {
-        throw new Error("The firmware releases response was invalid.");
-      }
+      const payload = await readApiData(
+        response,
+        isReleasesResponse,
+        "Unable to load firmware releases.",
+      );
 
       startTransition(() => {
         setReleases(payload.releases);
@@ -177,11 +171,11 @@ export default function FirmwareReleasesPage() {
         body: JSON.stringify(payload),
         timeoutMessage: "Saving the firmware release timed out.",
       });
-      const result = (await response.json()) as CreateReleaseResponse;
-
-      if (!response.ok) {
-        throw new Error(result.error || "Unable to create firmware release.");
-      }
+      const result = await readApiData(
+        response,
+        isCreateReleaseResponseData,
+        "Unable to create firmware release.",
+      );
 
       setFormState((current) => ({
         ...INITIAL_FORM_STATE,

@@ -1,6 +1,7 @@
 #include <AccelStepper.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
 #include <PubSubClient.h>
 #include <Update.h>
 #include <WebServer.h>
@@ -59,6 +60,26 @@
 #define SAFE_MOTOR_ACCELERATION 110.0f
 #endif
 
+#ifndef ENABLE_FACTORY_SETUP_MODE
+#define ENABLE_FACTORY_SETUP_MODE true
+#endif
+
+#ifndef SETUP_AP_SSID_PREFIX
+#define SETUP_AP_SSID_PREFIX "SmartShutter-"
+#endif
+
+#ifndef SETUP_AP_PASSWORD
+#define SETUP_AP_PASSWORD ""
+#endif
+
+#ifndef SETUP_PORTAL_TIMEOUT_MS
+#define SETUP_PORTAL_TIMEOUT_MS 300000
+#endif
+
+#ifndef MQTT_CLIENT_ID
+#define MQTT_CLIENT_ID ""
+#endif
+
 // -----------------------------------------------------------------------------
 // Device Configuration
 // -----------------------------------------------------------------------------
@@ -111,6 +132,7 @@ struct OtaDownloadResult {
 WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
 WebServer localServer(80);
+Preferences preferences;
 
 // Common 28BYJ-48 + ULN2003 half-step order for AccelStepper HALF4WIRE.
 AccelStepper stepper(AccelStepper::HALF4WIRE, IN1, IN3, IN2, IN4);
@@ -129,6 +151,8 @@ bool lastMovingState = false;
 bool localFallbackRoutesRegistered = false;
 bool localFallbackServerStarted = false;
 bool localFallbackApStarted = false;
+bool setupPortalActive = false;
+bool setupPortalApStarted = false;
 bool calibrationComplete = !SAFE_SETUP_MODE;
 bool movementLocked = false;
 
@@ -136,10 +160,19 @@ int targetPercent = 0;
 OtaState otaState = ENABLE_OTA_UPDATES ? OTA_STATE_IDLE : OTA_STATE_DISABLED;
 String otaLastError = "";
 String otaTargetVersion = "";
+String resolvedDeviceId = "";
+String resolvedMqttClientId = "";
+String resolvedCommandTopic = "";
+String resolvedStatusTopic = "";
+String runtimeWifiSsid = "";
+String runtimeWifiPassword = "";
+String setupPortalSsid = "";
+String setupPortalMessage = "";
 String lastCalibrationAction =
   SAFE_SETUP_MODE ? "SAFE_SETUP_MODE_ENABLED" : "";
 String movementLockedReason =
   SAFE_SETUP_MODE ? "Calibration required before larger movement." : "";
+unsigned long setupPortalStartedMs = 0;
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -285,6 +318,102 @@ void rememberCalibrationAction(const char* action) {
   lastCalibrationAction = action;
 }
 
+bool hasText(const char* value) {
+  return value != nullptr && strlen(value) > 0;
+}
+
+bool hasText(const String& value) {
+  return value.length() > 0;
+}
+
+String getMacSuffixUpper() {
+  const uint64_t chipMac = ESP.getEfuseMac();
+  char suffix[7];
+  snprintf(
+    suffix,
+    sizeof(suffix),
+    "%06llX",
+    static_cast<unsigned long long>(chipMac & 0xFFFFFFULL)
+  );
+  return String(suffix);
+}
+
+String getMacSuffixLower() {
+  String suffix = getMacSuffixUpper();
+  suffix.toLowerCase();
+  return suffix;
+}
+
+String resolveDeviceId() {
+  if (hasText(DEVICE_ID)) {
+    return String(DEVICE_ID);
+  }
+
+  return String("shutter-") + getMacSuffixLower();
+}
+
+String resolveMqttClientId() {
+  if (hasText(MQTT_CLIENT_ID)) {
+    return String(MQTT_CLIENT_ID);
+  }
+
+  return String("smart-shutter-") + resolvedDeviceId;
+}
+
+String resolveTopic(const char* configuredTopic, const char* topicSuffix) {
+  String topic = configuredTopic;
+  topic.trim();
+
+  if (topic.length() == 0) {
+    return String("shutters/") + resolvedDeviceId + "/" + topicSuffix;
+  }
+
+  topic.replace("{deviceId}", resolvedDeviceId);
+  return topic;
+}
+
+void loadStoredWiFiCredentials(String* ssid, String* password) {
+  if (ssid == nullptr || password == nullptr) {
+    return;
+  }
+
+  preferences.begin("smart-shutter", true);
+  *ssid = preferences.getString("wifi_ssid", "");
+  *password = preferences.getString("wifi_password", "");
+  preferences.end();
+}
+
+bool saveStoredWiFiCredentials(const String& ssid, const String& password) {
+  preferences.begin("smart-shutter", false);
+  const bool storedSsid = preferences.putString("wifi_ssid", ssid) > 0;
+  const size_t storedPasswordLength =
+    preferences.putString("wifi_password", password);
+  preferences.end();
+
+  if (storedSsid && (password.length() == 0 || storedPasswordLength > 0)) {
+    Serial.print("WiFi credentials saved for SSID: ");
+    Serial.println(ssid);
+  } else {
+    Serial.println("Failed to save WiFi credentials.");
+  }
+
+  return storedSsid && (password.length() == 0 || storedPasswordLength > 0);
+}
+
+void resolveRuntimeWiFiCredentials() {
+  if (hasText(WIFI_SSID)) {
+    runtimeWifiSsid = WIFI_SSID;
+    runtimeWifiPassword = WIFI_PASSWORD;
+    return;
+  }
+
+  loadStoredWiFiCredentials(&runtimeWifiSsid, &runtimeWifiPassword);
+}
+
+bool hasRuntimeWiFiCredentials() {
+  return hasText(runtimeWifiSsid);
+}
+
 String normalizeSha256(const String& rawValue) {
   String normalized = rawValue;
   normalized.trim();
@@ -308,6 +437,7 @@ String bytesToHexString(const unsigned char* bytes, size_t length) {
 }
 
 void publishStatus(bool forceLog = false);
+void startLocalFallbackServerIfNeeded();
 
 void setOtaState(
   OtaState nextState,
@@ -349,7 +479,7 @@ String buildApiUrl(const char* pathTemplate) {
   }
 
   String path = pathTemplate;
-  path.replace("{deviceId}", DEVICE_ID);
+  path.replace("{deviceId}", resolvedDeviceId);
 
   if (path.startsWith("http://") || path.startsWith("https://")) {
     return path;
@@ -397,7 +527,9 @@ size_t buildStatusPayload(
   bool movingValue
 ) {
   StaticJsonDocument<1024> statusDoc;
-  statusDoc["deviceId"] = DEVICE_ID;
+  statusDoc["deviceId"] = resolvedDeviceId;
+  statusDoc["resolvedDeviceId"] = resolvedDeviceId;
+  statusDoc["setupMode"] = setupPortalActive;
   statusDoc["firmwareVersion"] = FIRMWARE_VERSION;
   statusDoc["deviceUptimeMs"] = millis() - bootStartedMs;
   statusDoc["online"] = onlineValue;
@@ -408,13 +540,14 @@ size_t buildStatusPayload(
   statusDoc["currentSteps"] = stepper.currentPosition();
   statusDoc["targetSteps"] = stepper.targetPosition();
   statusDoc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
+  statusDoc["mqttConnected"] = mqttClient.connected();
   if (WiFi.status() == WL_CONNECTED) {
     statusDoc["rssi"] = WiFi.RSSI();
   } else {
     statusDoc["rssi"] = nullptr;
   }
   statusDoc["localFallbackActive"] =
-    localFallbackServerStarted || localFallbackApStarted;
+    localFallbackServerStarted || localFallbackApStarted || setupPortalApStarted;
   statusDoc["otaEnabled"] = ENABLE_OTA_UPDATES;
   statusDoc["otaState"] = otaStateToString(otaState);
   if (otaLastError.length() > 0) {
@@ -480,7 +613,7 @@ void publishStatus(bool forceLog) {
   const DeviceMode reportedMode =
     movingNow ? DEVICE_MODE_MOVING : deviceMode;
   buildStatusPayload(payload, sizeof(payload), true, reportedMode, movingNow);
-  const bool published = mqttClient.publish(STATUS_TOPIC, payload, true);
+  const bool published = mqttClient.publish(resolvedStatusTopic.c_str(), payload, true);
 
   if (forceLog) {
     lastStatusLogMs = 0;
@@ -829,7 +962,10 @@ bool fetchOtaManifest(OtaManifest* manifest) {
   }
 
   const char* manifestDeviceId = manifestDoc["deviceId"] | "";
-  if (strlen(manifestDeviceId) == 0 || strcmp(manifestDeviceId, DEVICE_ID) != 0) {
+  if (
+    strlen(manifestDeviceId) == 0 ||
+    strcmp(manifestDeviceId, resolvedDeviceId.c_str()) != 0
+  ) {
     Serial.println("OTA manifest rejected: deviceId mismatch.");
     return false;
   }
@@ -1212,6 +1348,160 @@ void handleCheckUpdateCommand(const char* source) {
 }
 
 // -----------------------------------------------------------------------------
+// Factory Setup Mode
+// -----------------------------------------------------------------------------
+
+String buildSetupPortalPage() {
+  String page;
+  page.reserve(2600);
+
+  page += F(
+    "<!doctype html><html><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>Smart Shutter Setup</title>"
+    "<style>"
+    "body{font-family:Arial,sans-serif;background:#07111f;color:#f8fafc;"
+    "margin:0;padding:24px;line-height:1.5}"
+    ".card{max-width:760px;margin:0 auto;background:#0f172a;border:1px solid "
+    "rgba(148,163,184,.16);border-radius:24px;padding:24px;box-shadow:0 20px "
+    "40px rgba(2,6,23,.45)}"
+    ".pill{display:inline-block;padding:8px 14px;border-radius:999px;"
+    "background:#083344;color:#a5f3fc;font-size:12px;font-weight:700;"
+    "letter-spacing:.12em;text-transform:uppercase}"
+    ".muted{color:#94a3b8;font-size:14px}"
+    ".status{margin:18px 0;padding:14px;border-radius:18px;background:#111c31;"
+    "border:1px solid rgba(148,163,184,.14)}"
+    "label{display:block;margin-top:16px;font-size:14px;color:#cbd5e1}"
+    "input{width:100%;margin-top:8px;padding:14px 16px;border-radius:18px;"
+    "border:1px solid rgba(148,163,184,.18);background:#08111f;color:#f8fafc;"
+    "box-sizing:border-box}"
+    "button{margin-top:18px;display:inline-flex;align-items:center;justify-content:center;"
+    "padding:14px 16px;border-radius:18px;border:0;background:#22d3ee;color:#082f49;"
+    "font-weight:700;cursor:pointer}"
+    "code{background:#08111f;padding:2px 6px;border-radius:8px}"
+    "</style></head><body><div class='card'>");
+
+  page += F("<div class='pill'>Setup Mode</div>");
+  page += F("<h1>Connect Smart Shutter to Wi-Fi</h1>");
+  page += F("<p class='muted'>Enter the home Wi-Fi network for this device. "
+            "Credentials are stored locally on the device and are not sent "
+            "through the main web app.</p>");
+
+  page += F("<div class='status'><div class='muted'>Device</div><strong>");
+  page += resolvedDeviceId;
+  page += F("</strong><div class='muted' style='margin-top:10px'>Setup network: <code>");
+  page += setupPortalSsid;
+  page += F("</code></div></div>");
+
+  if (setupPortalMessage.length() > 0) {
+    page += F("<div class='status'><div class='muted'>Status</div><strong>");
+    page += setupPortalMessage;
+    page += F("</strong></div>");
+  }
+
+  page += F("<form action='/setup/save' method='post'>");
+  page += F("<label>Wi-Fi SSID<input name='ssid' maxlength='64' "
+            "placeholder='Home Wi-Fi'></label>");
+  page += F("<label>Wi-Fi password<input name='password' maxlength='64' "
+            "placeholder='Password' type='password'></label>");
+  page += F("<button type='submit'>Save and Restart</button>");
+  page += F("</form>");
+
+  page += F("<p class='muted' style='margin-top:18px'>After saving, the device "
+            "will restart and try to connect to your Wi-Fi. Return to the app "
+            "once the device comes online.</p>");
+  page += F("</div></body></html>");
+  return page;
+}
+
+void startFactorySetupPortal(const String& reason) {
+  if (!ENABLE_FACTORY_SETUP_MODE) {
+    return;
+  }
+
+  setupPortalActive = true;
+  setupPortalStartedMs = millis();
+  setupPortalMessage = reason;
+
+  WiFi.disconnect();
+  WiFi.mode(WIFI_AP_STA);
+
+  if (!setupPortalApStarted) {
+    if (strlen(SETUP_AP_PASSWORD) == 0) {
+      setupPortalApStarted = WiFi.softAP(setupPortalSsid.c_str());
+    } else {
+      setupPortalApStarted =
+        WiFi.softAP(setupPortalSsid.c_str(), SETUP_AP_PASSWORD);
+    }
+  }
+
+  if (!setupPortalApStarted) {
+    Serial.println("Failed to start factory setup access point.");
+    setDeviceMode(DEVICE_MODE_ERROR);
+    return;
+  }
+
+  Serial.println("Factory setup mode active.");
+  Serial.print("Resolved deviceId: ");
+  Serial.println(resolvedDeviceId);
+  Serial.print("Setup AP SSID: ");
+  Serial.println(setupPortalSsid);
+  Serial.print("Setup AP IP: ");
+  Serial.println(WiFi.softAPIP());
+  if (reason.length() > 0) {
+    Serial.print("Setup reason: ");
+    Serial.println(reason);
+  }
+
+  startLocalFallbackServerIfNeeded();
+  setDeviceMode(DEVICE_MODE_WIFI_CONNECTING);
+}
+
+void stopFactorySetupPortalIfNeeded() {
+  if (!setupPortalActive) {
+    return;
+  }
+
+  setupPortalActive = false;
+  setupPortalMessage = "";
+  setupPortalStartedMs = 0;
+
+  if (setupPortalApStarted) {
+    WiFi.softAPdisconnect(true);
+    setupPortalApStarted = false;
+  }
+}
+
+void handleSetupPortalSave() {
+  if (!setupPortalActive) {
+    localServer.send(409, "text/plain", "Setup mode is not active.");
+    return;
+  }
+
+  String ssid = localServer.arg("ssid");
+  String password = localServer.arg("password");
+  ssid.trim();
+
+  if (ssid.length() == 0) {
+    setupPortalMessage = "Enter a Wi-Fi network name before saving.";
+    localServer.send(400, "text/html", buildSetupPortalPage());
+    return;
+  }
+
+  if (!saveStoredWiFiCredentials(ssid, password)) {
+    setupPortalMessage = "Unable to save Wi-Fi credentials. Try again.";
+    localServer.send(500, "text/html", buildSetupPortalPage());
+    return;
+  }
+
+  setupPortalMessage = "Wi-Fi saved. Restarting...";
+  localServer.send(200, "text/html", buildSetupPortalPage());
+  Serial.println("Rebooting after WiFi setup save...");
+  delay(800);
+  ESP.restart();
+}
+
+// -----------------------------------------------------------------------------
 // Local Fallback HTTP Server
 // -----------------------------------------------------------------------------
 
@@ -1257,7 +1547,7 @@ String buildLocalFallbackPage() {
 
   page += F("<div class='status-grid'>");
   page += F("<div class='status'><div class='muted'>Device</div><strong>");
-  page += DEVICE_ID;
+  page += resolvedDeviceId;
   page += F("</strong></div>");
   page += F("<div class='status'><div class='muted'>Mode</div><strong>");
   page += deviceModeToString(deviceMode);
@@ -1304,6 +1594,11 @@ void redirectLocalHome() {
 }
 
 void handleLocalRoot() {
+  if (setupPortalActive) {
+    localServer.send(200, "text/html", buildSetupPortalPage());
+    return;
+  }
+
   localServer.send(200, "text/html", buildLocalFallbackPage());
 }
 
@@ -1321,6 +1616,15 @@ void handleLocalStatus() {
 }
 
 void handleLocalSetPercent() {
+  if (setupPortalActive) {
+    localServer.send(
+      409,
+      "text/plain",
+      "Movement commands are unavailable while setup mode is active."
+    );
+    return;
+  }
+
   int nextPercent = 0;
   if (!tryParseInteger(localServer.arg("value"), &nextPercent)) {
     localServer.send(400, "text/plain", "Missing or invalid `value`.");
@@ -1342,7 +1646,10 @@ void handleLocalStop() {
 }
 
 void registerLocalFallbackRoutes() {
-  if (localFallbackRoutesRegistered || !ENABLE_LOCAL_FALLBACK_WEB) {
+  if (
+    localFallbackRoutesRegistered ||
+    (!ENABLE_LOCAL_FALLBACK_WEB && !ENABLE_FACTORY_SETUP_MODE)
+  ) {
     return;
   }
 
@@ -1350,11 +1657,15 @@ void registerLocalFallbackRoutes() {
   localServer.on("/status", HTTP_GET, handleLocalStatus);
   localServer.on("/set", HTTP_GET, handleLocalSetPercent);
   localServer.on("/stop", HTTP_GET, handleLocalStop);
+  localServer.on("/setup/save", HTTP_POST, handleSetupPortalSave);
   localFallbackRoutesRegistered = true;
 }
 
 void startLocalFallbackServerIfNeeded() {
-  if (!ENABLE_LOCAL_FALLBACK_WEB || localFallbackServerStarted) {
+  if (
+    localFallbackServerStarted ||
+    (!ENABLE_LOCAL_FALLBACK_WEB && !ENABLE_FACTORY_SETUP_MODE)
+  ) {
     return;
   }
 
@@ -1362,19 +1673,28 @@ void startLocalFallbackServerIfNeeded() {
   localServer.begin();
   localFallbackServerStarted = true;
 
-  Serial.println("Local fallback web server started.");
+  if (setupPortalActive) {
+    Serial.println("Local setup server started.");
+  } else {
+    Serial.println("Local fallback web server started.");
+  }
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("Local station URL: http://");
     Serial.println(WiFi.localIP());
   }
-  if (localFallbackApStarted) {
+  if (localFallbackApStarted || setupPortalApStarted) {
     Serial.print("Local AP URL: http://");
     Serial.println(WiFi.softAPIP());
   }
 }
 
 void startLocalFallbackAccessPointIfNeeded() {
-  if (!ENABLE_LOCAL_FALLBACK_WEB || localFallbackApStarted) {
+  if (
+    !ENABLE_LOCAL_FALLBACK_WEB ||
+    localFallbackApStarted ||
+    setupPortalActive ||
+    setupPortalApStarted
+  ) {
     return;
   }
 
@@ -1395,6 +1715,24 @@ void startLocalFallbackAccessPointIfNeeded() {
 }
 
 void maintainLocalFallback() {
+  if (setupPortalActive) {
+    if (
+      SETUP_PORTAL_TIMEOUT_MS > 0 &&
+      setupPortalStartedMs != 0 &&
+      millis() - setupPortalStartedMs >= SETUP_PORTAL_TIMEOUT_MS
+    ) {
+      Serial.println("Setup portal timed out. Restarting device.");
+      delay(500);
+      ESP.restart();
+    }
+
+    startLocalFallbackServerIfNeeded();
+    if (localFallbackServerStarted) {
+      localServer.handleClient();
+    }
+    return;
+  }
+
   if (!ENABLE_LOCAL_FALLBACK_WEB) {
     return;
   }
@@ -1416,21 +1754,21 @@ void maintainLocalFallback() {
 // -----------------------------------------------------------------------------
 
 void beginWiFiConnection() {
-  if (wifiConnectInProgress) {
+  if (wifiConnectInProgress || setupPortalActive || !hasRuntimeWiFiCredentials()) {
     return;
   }
 
   setDeviceMode(DEVICE_MODE_WIFI_CONNECTING);
 
-  WiFi.mode(localFallbackApStarted ? WIFI_AP_STA : WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.mode((localFallbackApStarted || setupPortalApStarted) ? WIFI_AP_STA : WIFI_STA);
+  WiFi.begin(runtimeWifiSsid.c_str(), runtimeWifiPassword.c_str());
 
   wifiConnectInProgress = true;
   wifiAttemptStartedMs = millis();
   lastWiFiRetryMs = wifiAttemptStartedMs;
 
   Serial.print("Connecting to WiFi SSID: ");
-  Serial.println(WIFI_SSID);
+  Serial.println(runtimeWifiSsid);
 }
 
 bool maintainWiFiConnection() {
@@ -1439,10 +1777,22 @@ bool maintainWiFiConnection() {
       wifiConnectInProgress = false;
       Serial.print("WiFi connected. IP address: ");
       Serial.println(WiFi.localIP());
+      stopFactorySetupPortalIfNeeded();
       setDeviceMode(DEVICE_MODE_MQTT_CONNECTING);
     }
 
     return true;
+  }
+
+  if (!hasRuntimeWiFiCredentials()) {
+    if (ENABLE_FACTORY_SETUP_MODE && !setupPortalActive) {
+      startFactorySetupPortal("No Wi-Fi credentials saved yet.");
+    }
+    return false;
+  }
+
+  if (setupPortalActive) {
+    return false;
   }
 
   const unsigned long now = millis();
@@ -1460,7 +1810,11 @@ bool maintainWiFiConnection() {
     WiFi.disconnect();
     wifiConnectInProgress = false;
     lastWiFiRetryMs = now;
-    setDeviceMode(DEVICE_MODE_ERROR);
+    if (ENABLE_FACTORY_SETUP_MODE) {
+      startFactorySetupPortal("Unable to join Wi-Fi. Update the network and try again.");
+    } else {
+      setDeviceMode(DEVICE_MODE_ERROR);
+    }
   }
 
   return false;
@@ -1499,10 +1853,10 @@ bool connectMqtt() {
   Serial.println(MQTT_PORT);
 
   if (!mqttClient.connect(
-        DEVICE_ID,
+        resolvedMqttClientId.c_str(),
         MQTT_USERNAME,
         MQTT_PASSWORD,
-        STATUS_TOPIC,
+        resolvedStatusTopic.c_str(),
         1,
         true,
         offlinePayload)) {
@@ -1513,7 +1867,7 @@ bool connectMqtt() {
   }
 
   Serial.println("MQTT connected.");
-  if (!mqttClient.subscribe(COMMAND_TOPIC, 1)) {
+  if (!mqttClient.subscribe(resolvedCommandTopic.c_str(), 1)) {
     Serial.println("Failed to subscribe to command topic.");
     mqttClient.disconnect();
     setDeviceMode(DEVICE_MODE_ERROR);
@@ -1521,7 +1875,7 @@ bool connectMqtt() {
   }
 
   Serial.print("Subscribed to command topic: ");
-  Serial.println(COMMAND_TOPIC);
+  Serial.println(resolvedCommandTopic);
 
   lastCloudHealthyMs = millis();
   setDeviceMode(DEVICE_MODE_READY);
@@ -1628,6 +1982,23 @@ void setup() {
 
   // Position is estimated in software only. If the motor skips steps or the
   // shutter is moved by hand, the estimated percentage can drift.
+  resolvedDeviceId = resolveDeviceId();
+  resolvedMqttClientId = resolveMqttClientId();
+  resolvedCommandTopic = resolveTopic(COMMAND_TOPIC, "commands");
+  resolvedStatusTopic = resolveTopic(STATUS_TOPIC, "status");
+  resolveRuntimeWiFiCredentials();
+  setupPortalSsid = String(SETUP_AP_SSID_PREFIX) + getMacSuffixUpper();
+
+  Serial.print("Resolved deviceId: ");
+  Serial.println(resolvedDeviceId);
+  Serial.print("Resolved MQTT client ID: ");
+  Serial.println(resolvedMqttClientId);
+  Serial.print("Resolved command topic: ");
+  Serial.println(resolvedCommandTopic);
+  Serial.print("Resolved status topic: ");
+  Serial.println(resolvedStatusTopic);
+  Serial.println("MQTT topics resolved.");
+
   applyMotionProfile();
   stepper.setCurrentPosition(percentToSteps(0));
   updateTargetPercentFromStepper();
@@ -1650,7 +2021,14 @@ void setup() {
     false
   );
 
-  beginWiFiConnection();
+  if (hasRuntimeWiFiCredentials()) {
+    beginWiFiConnection();
+  } else if (ENABLE_FACTORY_SETUP_MODE) {
+    startFactorySetupPortal("No Wi-Fi credentials saved yet.");
+  } else {
+    Serial.println("WiFi credentials are missing and factory setup mode is disabled.");
+    setDeviceMode(DEVICE_MODE_ERROR);
+  }
   maintainLocalFallback();
 }
 

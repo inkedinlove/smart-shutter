@@ -1,6 +1,5 @@
-import { NextResponse } from "next/server";
-
-import { getRegisteredDeviceById } from "@/lib/device-registry";
+import { AccessControlError, getAuthorizedDevice } from "@/lib/access-control";
+import { apiError, apiOk } from "@/lib/api-response";
 import { recordDeviceUpdateEvent } from "@/lib/firmware-releases";
 import { isDeviceUpdateEventStatus } from "@/lib/firmware";
 
@@ -23,13 +22,16 @@ function sanitizeDetail(value: unknown): string | null {
 
 export async function POST(request: Request, context: RouteContext) {
   const { deviceId } = await context.params;
-  const device = await getRegisteredDeviceById(deviceId);
+  let device;
 
-  if (!device) {
-    return NextResponse.json(
-      { ok: false, error: `Unknown deviceId: ${deviceId}` },
-      { status: 404 },
-    );
+  try {
+    ({ device } = await getAuthorizedDevice(deviceId));
+  } catch (error) {
+    if (error instanceof AccessControlError) {
+      return apiError(error.message, error.statusCode);
+    }
+
+    return apiError("Unable to authorize device access.", 500);
   }
 
   let parsedBody: unknown;
@@ -37,22 +39,15 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     parsedBody = await request.json();
   } catch {
-    return NextResponse.json(
-      { ok: false, error: "Request body must be valid JSON." },
-      { status: 400 },
-    );
+    return apiError("Request body must be valid JSON.", 400);
   }
 
   const status = (parsedBody as { status?: unknown })?.status;
 
   if (!isDeviceUpdateEventStatus(status)) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error:
-          "The `status` field must be one of `check_started`, `manifest_requested`, `update_available`, `update_not_available`, `update_blocked_motor_moving`, `update_blocked_ota_disabled`, `update_started`, `update_success`, or `update_failed`.",
-      },
-      { status: 400 },
+    return apiError(
+      "The `status` field must be one of `check_started`, `manifest_requested`, `update_available`, `update_not_available`, `update_blocked_motor_moving`, `update_blocked_ota_disabled`, `update_started`, `update_success`, or `update_failed`.",
+      400,
     );
   }
 
@@ -65,10 +60,7 @@ export async function POST(request: Request, context: RouteContext) {
     typeof firmwareVersionTo !== "string" ||
     firmwareVersionTo.trim().length === 0
   ) {
-    return NextResponse.json(
-      { ok: false, error: "The `firmwareVersionTo` field is required." },
-      { status: 400 },
-    );
+    return apiError("The `firmwareVersionTo` field is required.", 400);
   }
 
   const normalizedVersionFrom =
@@ -85,9 +77,8 @@ export async function POST(request: Request, context: RouteContext) {
       detail: sanitizeDetail((parsedBody as { detail?: unknown })?.detail),
     });
 
-    return NextResponse.json(
+    return apiOk(
       {
-        ok: true,
         stored: createdEvent !== null,
       },
       {
@@ -99,9 +90,6 @@ export async function POST(request: Request, context: RouteContext) {
   } catch (error) {
     console.error("Unable to record firmware event:", error);
 
-    return NextResponse.json(
-      { ok: false, error: "Unable to record the firmware event right now." },
-      { status: 503 },
-    );
+    return apiError("Unable to record the firmware event right now.", 503);
   }
 }

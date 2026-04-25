@@ -1,5 +1,8 @@
 # Firmware Build Guide
 
+This guide is the main ESP32 build path. For the MQTT-compatible ESP8266
+variant, use [esp8266-firmware-build.md](esp8266-firmware-build.md).
+
 ## Arduino IDE Setup
 
 1. Install the latest Arduino IDE 2.x.

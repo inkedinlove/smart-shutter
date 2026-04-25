@@ -1,13 +1,22 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { startTransition, useEffect, useMemo, useState } from "react";
 
 import AppShell from "@/app/_components/app-shell";
-import { fetchWithShortTimeout } from "@/lib/client-fetch";
+import {
+  fetchWithShortTimeout,
+  readApiData,
+  redirectToLogin,
+  SessionRequiredError,
+} from "@/lib/client-fetch";
 import {
   DEFAULT_NUDGE_AMOUNT,
   DEFAULT_SAFE_ALLOWED_MAX_PERCENT_STEP,
+  createDeviceDiagnostics,
+  type DeviceDiagnostics,
+  type DeviceClaimState,
   type DeviceCommand,
   type DeviceStatus,
   type OtaState,
@@ -127,6 +136,25 @@ function isFirmwareCheckResponse(value: unknown): value is FirmwareCheckResponse
   );
 }
 
+type DeviceRegistrationState = {
+  deviceId: string;
+  label: string | null;
+  claimState: DeviceClaimState;
+  ownerProfileId: string | null;
+  ownerProfileDisplayName: string | null;
+  ownedByCurrentProfile: boolean;
+  exists: boolean;
+};
+
+function isDeviceRegistrationState(value: unknown): value is DeviceRegistrationState {
+  return (
+    isRecord(value) &&
+    typeof value.deviceId === "string" &&
+    typeof value.claimState === "string" &&
+    typeof value.ownedByCurrentProfile === "boolean"
+  );
+}
+
 function formatVersion(value: string | null | undefined): string {
   return value && value.trim().length > 0 ? value : "Unavailable";
 }
@@ -163,6 +191,41 @@ function formatLastSeen(value: string | null | undefined): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(parsed);
+}
+
+function formatToggleState(
+  value: boolean | null | undefined,
+  labels: { on: string; off: string; unknown?: string },
+): string {
+  if (value === true) {
+    return labels.on;
+  }
+
+  if (value === false) {
+    return labels.off;
+  }
+
+  return labels.unknown ?? "Unknown";
+}
+
+function formatSignalStrength(value: number | null | undefined): string {
+  return typeof value === "number" ? `${value} dBm` : "Unavailable";
+}
+
+function formatCalibrationState(status: DeviceStatus | null): string {
+  if (status?.calibrationComplete === true) {
+    return "Complete";
+  }
+
+  if (status?.safetyMode === true) {
+    return "Required";
+  }
+
+  if (status?.lastSeenAt) {
+    return "Waiting";
+  }
+
+  return "Unknown";
 }
 
 function getResolvedOtaState(status: DeviceStatus | null): OtaState | null {
@@ -224,12 +287,36 @@ function getDeviceHealth(status: DeviceStatus | null, otaState: OtaState | null)
   };
 }
 
-function formatSignalStrength(rssi: number | undefined): string {
-  if (typeof rssi !== "number") {
-    return "Not reported";
+function getClaimStateLabel(claimState: DeviceClaimState | null | undefined): string {
+  switch (claimState) {
+    case "claimed":
+      return "Claimed";
+    case "unclaimed":
+      return "Unclaimed";
+    case "unknown":
+    default:
+      return "Unknown";
+  }
+}
+
+function getClaimStateMessage(
+  registration: DeviceRegistrationState | null,
+): string {
+  if (!registration) {
+    return "Waiting for device access";
   }
 
-  return `${rssi} dBm`;
+  if (registration.claimState === "unknown") {
+    return "Register this device before setup continues.";
+  }
+
+  if (registration.claimState === "unclaimed") {
+    return "Claim this device to continue.";
+  }
+
+  return registration.ownedByCurrentProfile
+    ? "This device is attached to your account."
+    : "This device belongs to another account.";
 }
 
 function SetupStepRail({
@@ -399,21 +486,7 @@ async function fetchDeviceStatus(deviceId: string): Promise<DeviceStatus> {
       timeoutMessage: "Device status timed out.",
     },
   );
-  const payload = (await response.json()) as unknown;
-
-  if (!response.ok) {
-    throw new Error(
-      isRecord(payload) && typeof payload.error === "string"
-        ? payload.error
-        : "Unable to load device status.",
-    );
-  }
-
-  if (!isDeviceStatus(payload)) {
-    throw new Error("The device status response was invalid.");
-  }
-
-  return payload;
+  return readApiData(response, isDeviceStatus, "Unable to load device status.");
 }
 
 async function fetchFirmwareCheck(
@@ -426,21 +499,28 @@ async function fetchFirmwareCheck(
       timeoutMessage: "Firmware check timed out.",
     },
   );
-  const payload = (await response.json()) as unknown;
+  return readApiData(
+    response,
+    isFirmwareCheckResponse,
+    "Unable to check firmware status.",
+  );
+}
 
-  if (!response.ok) {
-    throw new Error(
-      isRecord(payload) && typeof payload.error === "string"
-        ? payload.error
-        : "Unable to check firmware status.",
-    );
-  }
-
-  if (!isFirmwareCheckResponse(payload)) {
-    throw new Error("The firmware check response was invalid.");
-  }
-
-  return payload;
+async function fetchDeviceRegistrationState(
+  deviceId: string,
+): Promise<DeviceRegistrationState> {
+  const response = await fetchWithShortTimeout(
+    `/api/devices/${encodeURIComponent(deviceId)}/registration`,
+    {
+      cache: "no-store",
+      timeoutMessage: "Device registration lookup timed out.",
+    },
+  );
+  return readApiData(
+    response,
+    isDeviceRegistrationState,
+    "Unable to load device registration.",
+  );
 }
 
 function getCommandSuccessMessage(
@@ -477,6 +557,43 @@ function getCommandSuccessMessage(
   }
 }
 
+function getRecoveryMessage(errorMessage: string | null): string | null {
+  if (!errorMessage) {
+    return null;
+  }
+
+  const normalized = errorMessage.toLowerCase();
+
+  if (normalized.includes("offline")) {
+    return "Check power and Wi-Fi, then try the connection again.";
+  }
+
+  if (
+    normalized.includes("not attached to your account") ||
+    normalized.includes("device not found")
+  ) {
+    return "Choose a device from your account or claim the device first.";
+  }
+
+  if (
+    normalized.includes("status is unavailable") ||
+    normalized.includes("timed out") ||
+    normalized.includes("publish")
+  ) {
+    return "Wait a moment, then check the connection again.";
+  }
+
+  if (normalized.includes("calibration")) {
+    return "Finish calibration before trying a larger movement.";
+  }
+
+  if (normalized.includes("safe setup mode")) {
+    return "Keep movement small until setup is complete.";
+  }
+
+  return "Try again. If the device still does not respond, check the installation.";
+}
+
 export default function ConnectWizard() {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [calibrationGuideStage, setCalibrationGuideStage] =
@@ -485,26 +602,88 @@ export default function ConnectWizard() {
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
   const [checkResult, setCheckResult] = useState<FirmwareCheckResponse | null>(null);
   const [isCheckingFirmware, setIsCheckingFirmware] = useState(false);
+  const [isLoadingStatus, setIsLoadingStatus] = useState(false);
+  const [registrationState, setRegistrationState] =
+    useState<DeviceRegistrationState | null>(null);
   const [isSendingCommand, setIsSendingCommand] = useState(false);
+  const [statusRetryToken, setStatusRetryToken] = useState(0);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const searchParams = useSearchParams();
   const {
     deviceRegistryError,
     devices,
     isLoadingDevices,
+    reloadDevices,
     selectedDevice,
     selectedDeviceId,
     setSelectedDeviceId,
   } = useDeviceRegistry();
+  const requestedDeviceId = searchParams.get("deviceId")?.trim() || "";
+
+  useEffect(() => {
+    if (!requestedDeviceId || devices.length === 0) {
+      return;
+    }
+
+    if (
+      requestedDeviceId !== selectedDeviceId &&
+      devices.some((device) => device.deviceId === requestedDeviceId)
+    ) {
+      setSelectedDeviceId(requestedDeviceId);
+    }
+  }, [devices, requestedDeviceId, selectedDeviceId, setSelectedDeviceId]);
+
+  useEffect(() => {
+    if (!requestedDeviceId) {
+      setRegistrationState(null);
+      return;
+    }
+
+    let isCancelled = false;
+
+    async function loadRegistration() {
+      try {
+        const nextState = await fetchDeviceRegistrationState(requestedDeviceId);
+
+        if (isCancelled) {
+          return;
+        }
+
+        startTransition(() => {
+          setRegistrationState(nextState);
+        });
+      } catch (error) {
+        if (isCancelled) {
+          return;
+        }
+
+        if (error instanceof SessionRequiredError) {
+          redirectToLogin(`/connect?deviceId=${encodeURIComponent(requestedDeviceId)}`);
+          return;
+        }
+      }
+    }
+
+    void loadRegistration();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [requestedDeviceId]);
 
   useEffect(() => {
     if (!selectedDeviceId) {
+      setIsLoadingStatus(false);
       return;
     }
 
     let isCancelled = false;
 
     async function loadStatus() {
+      setIsLoadingStatus(true);
+
       try {
         const status = await fetchDeviceStatus(selectedDeviceId);
 
@@ -514,9 +693,15 @@ export default function ConnectWizard() {
 
         startTransition(() => {
           setDeviceStatus(status);
+          setErrorMessage(null);
         });
       } catch (error) {
         if (isCancelled) {
+          return;
+        }
+
+        if (error instanceof SessionRequiredError) {
+          redirectToLogin(`/connect?deviceId=${encodeURIComponent(selectedDeviceId)}`);
           return;
         }
 
@@ -524,7 +709,16 @@ export default function ConnectWizard() {
 
         startTransition(() => {
           setDeviceStatus(null);
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load device status.",
+          );
         });
+      } finally {
+        if (!isCancelled) {
+          setIsLoadingStatus(false);
+        }
       }
     }
 
@@ -538,7 +732,7 @@ export default function ConnectWizard() {
       isCancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [selectedDeviceId]);
+  }, [selectedDeviceId, statusRetryToken]);
 
   async function runFirmwareCheck() {
     if (!selectedDeviceId) {
@@ -562,6 +756,11 @@ export default function ConnectWizard() {
         setActionMessage(`Checked setup status for ${selectedDeviceId}.`);
       });
     } catch (error) {
+      if (error instanceof SessionRequiredError) {
+        redirectToLogin(`/connect?deviceId=${encodeURIComponent(selectedDeviceId)}`);
+        return;
+      }
+
       setErrorMessage(
         error instanceof Error ? error.message : "Unable to check firmware.",
       );
@@ -593,20 +792,24 @@ export default function ConnectWizard() {
         }),
         timeoutMessage: "Sending the command timed out.",
       });
-      const payload = (await response.json()) as {
-        command?: DeviceCommand;
-        error?: string;
-      };
-
-      if (!response.ok) {
-        throw new Error(payload.error || "Unable to send the command.");
-      }
+      const payload = await readApiData(
+        response,
+        (value): value is { command: DeviceCommand } =>
+          isRecord(value) && "command" in value && isRecord(value.command),
+        "Unable to send the command.",
+      );
 
       setActionMessage(
         getCommandSuccessMessage(selectedDeviceId, payload.command),
       );
+      setStatusRetryToken((current) => current + 1);
       return true;
     } catch (error) {
+      if (error instanceof SessionRequiredError) {
+        redirectToLogin(`/connect?deviceId=${encodeURIComponent(selectedDeviceId)}`);
+        return false;
+      }
+
       setErrorMessage(
         error instanceof Error ? error.message : "Unable to send the command.",
       );
@@ -619,6 +822,7 @@ export default function ConnectWizard() {
   const selectedDeviceStatus =
     deviceStatus?.deviceId === selectedDeviceId ? deviceStatus : null;
   const resolvedOtaState = getResolvedOtaState(selectedDeviceStatus);
+  const deviceHealth = getDeviceHealth(selectedDeviceStatus, resolvedOtaState);
   const currentReportedFirmware =
     selectedDeviceStatus?.firmwareVersion ??
     (checkResult?.deviceId === selectedDeviceId
@@ -648,6 +852,83 @@ export default function ConnectWizard() {
   const movementLockedByOperator = (selectedDeviceStatus?.movementLockedReason ?? "")
     .toLowerCase()
     .includes("locked");
+  const requestedDeviceMissing =
+    Boolean(requestedDeviceId) &&
+    !isLoadingDevices &&
+    devices.length > 0 &&
+    !devices.some((device) => device.deviceId === requestedDeviceId);
+  const registrationSummary =
+    requestedDeviceMissing && registrationState
+      ? registrationState
+      : selectedDeviceStatus
+        ? {
+            deviceId:
+              selectedDeviceStatus.resolvedDeviceId || selectedDeviceStatus.deviceId,
+            label: selectedDevice?.label ?? null,
+            claimState: selectedDeviceStatus.claimState,
+            ownerProfileId: null,
+            ownerProfileDisplayName: null,
+            ownedByCurrentProfile: true,
+            exists: true,
+          }
+        : registrationState;
+  const displayedDeviceId =
+    requestedDeviceMissing && requestedDeviceId ? requestedDeviceId : selectedDeviceId;
+  const displayedDeviceLabel =
+    requestedDeviceMissing
+      ? registrationSummary?.label ?? "Requested device"
+      : selectedDevice?.label ?? "Loading device";
+  const claimStateLabel = getClaimStateLabel(registrationSummary?.claimState);
+  const activeErrorMessage =
+    requestedDeviceMissing && registrationSummary?.claimState === "unknown"
+      ? "This device is not registered yet."
+      : requestedDeviceMissing && registrationSummary?.claimState === "unclaimed"
+        ? "This device has not been claimed yet."
+        : requestedDeviceMissing && registrationSummary?.claimState === "claimed"
+          ? "This device belongs to another account."
+          : requestedDeviceMissing
+            ? "This device is not attached to your account."
+            : errorMessage ?? deviceRegistryError;
+  const activeErrorNextAction =
+    requestedDeviceMissing && registrationSummary?.claimState === "unknown"
+      ? "Ask an administrator to register the device before setup continues."
+      : requestedDeviceMissing && registrationSummary?.claimState === "unclaimed"
+        ? "Use the claim link or enter the claim code to attach this device to your account."
+        : requestedDeviceMissing && registrationSummary?.claimState === "claimed"
+          ? "Sign in with the account that owns this device or ask support for help."
+          : requestedDeviceMissing
+            ? "Choose one of your devices or claim this device first."
+            : getRecoveryMessage(activeErrorMessage);
+  const connectionSummaryValue = requestedDeviceMissing
+    ? registrationSummary?.claimState === "claimed"
+      ? "Unavailable"
+      : "Waiting"
+    : isLoadingStatus
+      ? "Checking"
+      : getConnectivityLabel(selectedDeviceStatus);
+  const connectionSummaryMeta = requestedDeviceMissing
+    ? registrationSummary?.claimState === "unknown"
+      ? "Register the device in the cloud first"
+      : registrationSummary?.claimState === "unclaimed"
+        ? "Claim the device before setup"
+        : "This device is owned by another account"
+    : `${deviceHealth.label} • ${formatLastSeen(selectedDeviceStatus?.lastSeenAt)}`;
+  const deviceOffline =
+    Boolean(selectedDeviceId) &&
+    !isLoadingStatus &&
+    !activeErrorMessage &&
+    (!selectedDeviceStatus?.lastSeenAt || !selectedDeviceStatus.online);
+  const diagnosticsSnapshot = useMemo<DeviceDiagnostics | null>(() => {
+    if (!selectedDeviceId) {
+      return null;
+    }
+
+    return createDeviceDiagnostics(
+      selectedDeviceId,
+      registrationSummary?.claimState ?? selectedDeviceStatus?.claimState ?? "unknown",
+      selectedDeviceStatus,
+    );
+  }, [registrationSummary?.claimState, selectedDeviceId, selectedDeviceStatus]);
 
   const firmwareStatusMessage = useMemo(() => {
     if (!checkResult || checkResult.deviceId !== selectedDeviceId) {
@@ -770,13 +1051,29 @@ export default function ConnectWizard() {
     selectedDeviceStatus?.lastCalibrationAction,
     "Waiting for the first setup action",
   );
-  const activeErrorMessage = errorMessage ?? deviceRegistryError;
-  const deviceHealth = getDeviceHealth(selectedDeviceStatus, resolvedOtaState);
   const sidebarUpdateStatus = checkResult
     ? checkResult.updateAvailable
       ? "Yes"
       : "No"
     : "Pending";
+
+  async function copyDiagnostics() {
+    if (!diagnosticsSnapshot) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        JSON.stringify(diagnosticsSnapshot, null, 2),
+      );
+      setErrorMessage(null);
+      setActionMessage("Copied device diagnostics.");
+    } catch {
+      setErrorMessage(
+        "Unable to copy diagnostics. Select the device again and try once more.",
+      );
+    }
+  }
 
   return (
     <AppShell
@@ -788,6 +1085,7 @@ export default function ConnectWizard() {
         setCurrentStepIndex(0);
         setCalibrationGuideStage("prepare");
         setIsRecalibrating(false);
+        setIsDiagnosticsOpen(false);
         setDeviceStatus(null);
         setSelectedDeviceId(deviceId);
         setCheckResult(null);
@@ -811,12 +1109,6 @@ export default function ConnectWizard() {
               </p>
             </div>
 
-            <Link
-              className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-cyan-200 transition hover:border-cyan-300/40 hover:bg-cyan-400/10 hover:text-cyan-100"
-              href="/setup"
-            >
-              Open Setup Console
-            </Link>
           </div>
 
           <div className="mt-6 rounded-[1rem] border border-rose-400/25 bg-rose-400/8 p-5">
@@ -856,29 +1148,29 @@ export default function ConnectWizard() {
           <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <SummaryCard
               label="Device"
-              meta={selectedDeviceId || "Waiting for device"}
-              value={selectedDevice?.label ?? "Loading device"}
+              meta={displayedDeviceId || "Waiting for device"}
+              value={displayedDeviceLabel}
+            />
+            <SummaryCard
+              label="Claim"
+              meta={getClaimStateMessage(registrationSummary)}
+              value={claimStateLabel}
             />
             <SummaryCard
               label="Status"
-              meta={`${deviceHealth.label} • ${formatLastSeen(selectedDeviceStatus?.lastSeenAt)}`}
-              value={getConnectivityLabel(selectedDeviceStatus)}
+              meta={connectionSummaryMeta}
+              value={connectionSummaryValue}
               badge={
                 <span
-                  className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${getConnectivityClasses(selectedDeviceStatus)}`}
+                  className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${
+                    requestedDeviceMissing
+                      ? "border-amber-300/20 bg-amber-300/10 text-amber-100"
+                      : getConnectivityClasses(selectedDeviceStatus)
+                  }`}
                 >
-                  {getConnectivityLabel(selectedDeviceStatus)}
+                  {connectionSummaryValue}
                 </span>
               }
-            />
-            <SummaryCard
-              label="Safety"
-              meta={
-                calibrationComplete
-                  ? "Calibration complete"
-                  : movementLockedReason ?? `Step limit ${allowedMaxPercentStep}%`
-              }
-              value={safetyMode ? "Safe mode on" : "Normal movement"}
             />
             <SummaryCard
               label="Firmware"
@@ -890,6 +1182,126 @@ export default function ConnectWizard() {
               value={formatVersion(currentReportedFirmware)}
             />
           </div>
+
+          {selectedDeviceId ? (
+            <div className="mt-6 rounded-[1rem] border border-white/10 bg-white/5 p-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.24em] text-slate-400">
+                    Device Status
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">
+                    Check these details before troubleshooting remotely.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!diagnosticsSnapshot}
+                    onClick={() => {
+                      void copyDiagnostics();
+                    }}
+                  >
+                    Copy diagnostics
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10"
+                    onClick={() => {
+                      setIsDiagnosticsOpen((current) => !current);
+                    }}
+                  >
+                    {isDiagnosticsOpen ? "Hide details" : "Show details"}
+                  </button>
+                </div>
+              </div>
+
+              {isDiagnosticsOpen ? (
+                <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <SummaryCard
+                    label="Connection"
+                    meta={
+                      diagnosticsSnapshot?.online
+                        ? "Device is reporting normally"
+                        : "Check power and Wi-Fi"
+                    }
+                    value={
+                      diagnosticsSnapshot?.online
+                        ? "Online"
+                        : diagnosticsSnapshot?.lastSeenAt
+                          ? "Offline"
+                          : isLoadingStatus
+                            ? "Checking"
+                            : "Unknown"
+                    }
+                  />
+                  <SummaryCard
+                    label="Last seen"
+                    meta={
+                      diagnosticsSnapshot?.deviceUptimeMs != null
+                        ? `${Math.round(diagnosticsSnapshot.deviceUptimeMs / 1000)}s uptime`
+                        : "Waiting for device heartbeat"
+                    }
+                    value={formatLastSeen(diagnosticsSnapshot?.lastSeenAt)}
+                  />
+                  <SummaryCard
+                    label="Signal strength"
+                    meta={
+                      diagnosticsSnapshot?.wifiConnected === false
+                        ? "Wi-Fi not connected"
+                        : "Reported by the device"
+                    }
+                    value={formatSignalStrength(diagnosticsSnapshot?.rssi)}
+                  />
+                  <SummaryCard
+                    label="Firmware"
+                    meta={`OTA ${diagnosticsSnapshot?.otaState ?? "Unknown"}`}
+                    value={formatVersion(diagnosticsSnapshot?.firmwareVersion)}
+                  />
+                  <SummaryCard
+                    label="Setup mode"
+                    meta="Local Wi-Fi onboarding"
+                    value={formatToggleState(diagnosticsSnapshot?.setupMode, {
+                      on: "On",
+                      off: "Off",
+                    })}
+                  />
+                  <SummaryCard
+                    label="Calibration"
+                    meta={formatToggleState(diagnosticsSnapshot?.safetyMode, {
+                      on: "Safety mode on",
+                      off: "Safety mode off",
+                    })}
+                    value={formatCalibrationState(selectedDeviceStatus)}
+                  />
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {safetyMode ? (
+            <div className="mt-6 rounded-[1rem] border border-amber-300/20 bg-amber-300/10 p-5 text-amber-50">
+              <div className="text-xs uppercase tracking-[0.24em] text-amber-100/80">
+                Safety mode is on
+              </div>
+              <p className="mt-2 text-sm leading-7">
+                Start with small movements and keep hands clear of the shutter.
+                Press STOP immediately if anything binds, buzzes, clicks, or strains.
+              </p>
+            </div>
+          ) : null}
+
+          {selectedDeviceStatus?.online && !calibrationComplete && currentStepIndex >= 2 ? (
+            <div className="mt-6 rounded-[1rem] border border-cyan-400/20 bg-cyan-400/10 p-5 text-cyan-100">
+              <div className="text-xs uppercase tracking-[0.24em] text-cyan-100/80">
+                Calibration incomplete
+              </div>
+              <p className="mt-2 text-sm leading-7">
+                Finish safe calibration before running larger movement commands.
+              </p>
+            </div>
+          ) : null}
 
           <div className="mt-6 rounded-[1.05rem] border border-white/10 bg-black/18 p-6 sm:p-8">
             {currentStepIndex === 0 ? (
@@ -908,39 +1320,94 @@ export default function ConnectWizard() {
                   <div className={METRIC_CARD_CLASS}>
                     <div className={METRIC_LABEL_CLASS}>Selected device</div>
                     <div className={METRIC_VALUE_CLASS}>
-                      {selectedDevice?.label ?? "Loading device list..."}
+                      {displayedDeviceLabel}
                     </div>
                     <div className="wrap-anywhere mt-2 font-mono text-sm text-cyan-100">
-                      {selectedDeviceId || "Waiting for device list..."}
+                      {displayedDeviceId || "Waiting for device list..."}
                     </div>
                   </div>
 
-                <div className={METRIC_CARD_CLASS}>
-                  <div className={METRIC_LABEL_CLASS}>Signal</div>
-                  <div className={METRIC_VALUE_CLASS}>
-                    {formatSignalStrength(selectedDeviceStatus?.rssi)}
+                  <div className={METRIC_CARD_CLASS}>
+                    <div className={METRIC_LABEL_CLASS}>Claim</div>
+                    <div className={METRIC_VALUE_CLASS}>
+                      {claimStateLabel}
+                    </div>
+                    <div className={METRIC_META_CLASS}>
+                      {getClaimStateMessage(registrationSummary)}
+                    </div>
                   </div>
-                  <div className={METRIC_META_CLASS}>
-                    It can stay offline until the first install is done.
-                  </div>
-                </div>
                 </div>
 
-                {!selectedDeviceStatus?.online ? (
-                  <div className="mt-6 rounded-[1rem] border border-white/10 bg-white/5 p-5">
+                {requestedDeviceMissing && registrationSummary?.claimState === "unknown" ? (
+                  <div className="mt-6 rounded-[1rem] border border-amber-300/20 bg-amber-300/10 p-5">
                     <div className="text-sm font-semibold text-white">
-                      Need install or recovery?
+                      This device must be registered first.
                     </div>
-                    <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-400">
-                      Use the USB install page, then return here once the device is
-                      back online.
+                    <p className="mt-2 max-w-3xl text-sm leading-7 text-amber-50/90">
+                      Ask an administrator to register this factory device before
+                      it can be claimed and brought online.
                     </p>
-                    <Link
-                      className="mt-4 inline-flex items-center justify-center rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10"
-                      href="/flash"
-                    >
-                      Open Flash
-                    </Link>
+                  </div>
+                ) : null}
+
+                {requestedDeviceMissing && registrationSummary?.claimState === "unclaimed" ? (
+                  <div className="mt-6 rounded-[1rem] border border-cyan-400/20 bg-cyan-400/10 p-5">
+                    <div className="text-sm font-semibold text-white">
+                      Claim this device before setup.
+                    </div>
+                    <p className="mt-2 max-w-3xl text-sm leading-7 text-cyan-100/90">
+                      Use the claim code or claim link to attach this device to
+                      your account.
+                    </p>
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <Link
+                        className="inline-flex items-center justify-center rounded-xl border border-cyan-300/30 bg-cyan-400/12 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/18"
+                        href="/claim"
+                      >
+                        Open claim
+                      </Link>
+                    </div>
+                  </div>
+                ) : null}
+
+                {requestedDeviceMissing && registrationSummary?.claimState === "claimed" ? (
+                  <div className="mt-6 rounded-[1rem] border border-amber-300/20 bg-amber-300/10 p-5">
+                    <div className="text-sm font-semibold text-white">
+                      This device belongs to another account.
+                    </div>
+                    <p className="mt-2 max-w-3xl text-sm leading-7 text-amber-50/90">
+                      Sign in with the account that owns this device or ask
+                      support for help.
+                    </p>
+                  </div>
+                ) : null}
+
+                {deviceOffline ? (
+                  <div className="mt-6 rounded-[1rem] border border-white/10 bg-white/5 p-5">
+                    <div className="text-sm font-semibold text-white">Device is offline.</div>
+                    <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-400">
+                      Check power and Wi-Fi. If this is the first setup, put the
+                      device in setup mode and connect it to Wi-Fi through the
+                      device setup network.
+                    </p>
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10"
+                        onClick={() => {
+                          setStatusRetryToken((current) => current + 1);
+                          reloadDevices();
+                        }}
+                      >
+                        Retry connection
+                      </button>
+                      <Link
+                        className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10"
+                        href={`/setup-device?deviceId=${encodeURIComponent(selectedDeviceId)}`}
+                      >
+                        Open Wi-Fi setup
+                      </Link>
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -1008,16 +1475,28 @@ export default function ConnectWizard() {
                     {formatLastSeen(selectedDeviceStatus?.lastSeenAt)}
                   </div>
 
-                  <button
-                    type="button"
-                    className="rounded-xl bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-cyan-400/50"
-                    disabled={isLoadingDevices || isCheckingFirmware || !selectedDeviceId}
-                    onClick={() => {
-                      void runFirmwareCheck();
-                    }}
-                  >
-                    {isCheckingFirmware ? "Checking..." : "Check Firmware"}
-                  </button>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10"
+                      onClick={() => {
+                        setStatusRetryToken((current) => current + 1);
+                        reloadDevices();
+                      }}
+                    >
+                      Check again
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-xl bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-cyan-400/50"
+                      disabled={isLoadingDevices || isCheckingFirmware || !selectedDeviceId}
+                      onClick={() => {
+                        void runFirmwareCheck();
+                      }}
+                    >
+                      {isCheckingFirmware ? "Checking..." : "Check Firmware"}
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : null}
@@ -1489,9 +1968,41 @@ export default function ConnectWizard() {
             </div>
 
             {activeErrorMessage ? (
-              <p className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
-                {activeErrorMessage}
-              </p>
+              <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
+                <div className="font-semibold text-amber-50">{activeErrorMessage}</div>
+                {activeErrorNextAction ? (
+                  <div className="mt-1 text-amber-100/90">{activeErrorNextAction}</div>
+                ) : null}
+                <div className="mt-3 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    className="inline-flex rounded-lg border border-amber-200/20 bg-black/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-amber-50 transition hover:bg-black/30"
+                    onClick={() => {
+                      setStatusRetryToken((current) => current + 1);
+                      reloadDevices();
+                    }}
+                  >
+                    Retry connection
+                  </button>
+                  {requestedDeviceMissing ? (
+                    <Link
+                      className="inline-flex rounded-lg border border-amber-200/20 bg-black/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-amber-50 transition hover:bg-black/30"
+                      href="/devices"
+                    >
+                      Open devices
+                    </Link>
+                  ) : null}
+                  {requestedDeviceMissing &&
+                  registrationSummary?.claimState === "unclaimed" ? (
+                    <Link
+                      className="inline-flex rounded-lg border border-amber-200/20 bg-black/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-amber-50 transition hover:bg-black/30"
+                      href="/claim"
+                    >
+                      Claim device
+                    </Link>
+                  ) : null}
+                </div>
+              </div>
             ) : null}
 
             {actionMessage ? (

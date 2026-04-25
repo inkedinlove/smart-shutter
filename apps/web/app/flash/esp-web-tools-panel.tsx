@@ -157,6 +157,12 @@ export default function EspWebToolsPanel() {
             ready. If installation is unavailable here, use the USB flashing
             steps in the docs.
           </p>
+
+          <div className="mt-4 rounded-[1rem] border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm leading-7 text-amber-100">
+            ESP8266 boards such as NodeMCU and D1 mini should use the manual
+            Arduino IDE or Arduino CLI flashing flow for now. This browser
+            install path remains focused on supported ESP32 builds.
+          </div>
         </div>
 
         <div className="mt-6 grid gap-4 md:grid-cols-2">

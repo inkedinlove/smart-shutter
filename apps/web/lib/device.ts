@@ -24,6 +24,14 @@ export const OTA_STATE_VALUES = [
 
 export type OtaState = (typeof OTA_STATE_VALUES)[number];
 
+export const DEVICE_CLAIM_STATE_VALUES = [
+  "unknown",
+  "unclaimed",
+  "claimed",
+] as const;
+
+export type DeviceClaimState = (typeof DEVICE_CLAIM_STATE_VALUES)[number];
+
 export const DEFAULT_NUDGE_AMOUNT = 2;
 export const MAX_NUDGE_AMOUNT = 10;
 export const DEFAULT_SAFE_ALLOWED_MAX_PERCENT_STEP = 10;
@@ -103,6 +111,8 @@ export type DeviceCommandInput =
 
 export type DeviceStatus = {
   deviceId: string;
+  resolvedDeviceId: string;
+  claimState: DeviceClaimState;
   online: boolean;
   moving: boolean;
   deviceMode: DeviceMode;
@@ -112,6 +122,9 @@ export type DeviceStatus = {
   firmwareVersion?: string;
   deviceUptimeMs?: number;
   rssi?: number;
+  setupMode?: boolean;
+  wifiConnected?: boolean;
+  mqttConnected?: boolean;
   otaEnabled?: boolean;
   otaState?: OtaState;
   otaLastError?: string;
@@ -121,6 +134,22 @@ export type DeviceStatus = {
   allowedMaxPercentStep?: number;
   lastCalibrationAction?: string;
   movementLockedReason?: string;
+};
+
+export type DeviceDiagnostics = {
+  deviceId: string;
+  claimState: DeviceClaimState;
+  online: boolean;
+  lastSeenAt: string | null;
+  firmwareVersion: string | null;
+  setupMode: boolean | null;
+  safetyMode: boolean | null;
+  calibrationComplete: boolean | null;
+  otaState: OtaState | null;
+  wifiConnected: boolean | null;
+  mqttConnected: boolean | null;
+  rssi: number | null;
+  deviceUptimeMs: number | null;
 };
 
 export function isDeviceMode(value: unknown): value is DeviceMode {
@@ -134,9 +163,26 @@ export function isOtaState(value: unknown): value is OtaState {
   return typeof value === "string" && OTA_STATE_VALUES.includes(value as OtaState);
 }
 
-export function createDefaultDeviceStatus(deviceId: string): DeviceStatus {
+export function isDeviceClaimState(value: unknown): value is DeviceClaimState {
+  return (
+    typeof value === "string" &&
+    DEVICE_CLAIM_STATE_VALUES.includes(value as DeviceClaimState)
+  );
+}
+
+export function createDefaultDeviceStatus(
+  deviceId: string,
+  overrides?: Partial<
+    Pick<
+      DeviceStatus,
+      "resolvedDeviceId" | "claimState" | "setupMode" | "wifiConnected" | "mqttConnected"
+    >
+  >,
+): DeviceStatus {
   return {
     deviceId,
+    resolvedDeviceId: overrides?.resolvedDeviceId ?? deviceId,
+    claimState: overrides?.claimState ?? "unknown",
     online: false,
     moving: false,
     deviceMode: "ERROR",
@@ -146,6 +192,9 @@ export function createDefaultDeviceStatus(deviceId: string): DeviceStatus {
     firmwareVersion: undefined,
     deviceUptimeMs: undefined,
     rssi: undefined,
+    setupMode: overrides?.setupMode,
+    wifiConnected: overrides?.wifiConnected,
+    mqttConnected: overrides?.mqttConnected,
     otaEnabled: undefined,
     otaState: undefined,
     otaLastError: undefined,
@@ -155,6 +204,29 @@ export function createDefaultDeviceStatus(deviceId: string): DeviceStatus {
     allowedMaxPercentStep: undefined,
     lastCalibrationAction: undefined,
     movementLockedReason: undefined,
+  };
+}
+
+export function createDeviceDiagnostics(
+  deviceId: string,
+  claimState: DeviceClaimState,
+  status: DeviceStatus | null,
+): DeviceDiagnostics {
+  return {
+    deviceId,
+    claimState,
+    online: status?.online ?? false,
+    lastSeenAt: status?.lastSeenAt ?? null,
+    firmwareVersion: status?.firmwareVersion ?? null,
+    setupMode: status?.setupMode ?? null,
+    safetyMode: status?.safetyMode ?? null,
+    calibrationComplete: status?.calibrationComplete ?? null,
+    otaState:
+      status?.otaState ?? (status?.otaEnabled === false ? "DISABLED" : null),
+    wifiConnected: status?.wifiConnected ?? null,
+    mqttConnected: status?.mqttConnected ?? null,
+    rssi: status?.rssi ?? null,
+    deviceUptimeMs: status?.deviceUptimeMs ?? null,
   };
 }
 

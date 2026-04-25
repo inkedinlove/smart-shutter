@@ -2,6 +2,8 @@ import "server-only";
 
 import { timingSafeEqual } from "node:crypto";
 
+import { requireAdminSession } from "@/lib/access-control";
+
 export class AdminAuthorizationError extends Error {
   statusCode: number;
 
@@ -42,5 +44,27 @@ export function requireAdminToken(request: Request): void {
 
   if (!providedToken || !isValidAdminToken(providedToken, configuredToken)) {
     throw new AdminAuthorizationError("Unauthorized.", 401);
+  }
+}
+
+export async function requireAdminAccess(request: Request): Promise<void> {
+  const providedToken = request.headers.get("x-admin-token")?.trim();
+
+  if (providedToken) {
+    requireAdminToken(request);
+    return;
+  }
+
+  try {
+    await requireAdminSession();
+  } catch (error) {
+    if (error instanceof Error && "statusCode" in error) {
+      throw new AdminAuthorizationError(
+        error.message,
+        typeof error.statusCode === "number" ? error.statusCode : 403,
+      );
+    }
+
+    throw error;
   }
 }

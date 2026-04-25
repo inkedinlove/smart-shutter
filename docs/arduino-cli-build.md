@@ -3,6 +3,9 @@
 This guide adds a repeatable CLI path for Phase A firmware validation before
 any board is flashed.
 
+For the MQTT-compatible ESP8266 target, also see
+[esp8266-firmware-build.md](esp8266-firmware-build.md).
+
 ## Why Use Arduino CLI
 
 - It gives us a scriptable compile step for CI-like validation.
@@ -17,13 +20,14 @@ Use the install method you prefer, then confirm:
 arduino-cli version
 ```
 
-## Configure The ESP32 Board Index
+## Configure The Board Index
 
 Initialize Arduino CLI once and add the Espressif board manager URL:
 
 ```powershell
 arduino-cli config init
 arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli config add board_manager.additional_urls http://arduino.esp8266.com/stable/package_esp8266com_index.json
 arduino-cli core update-index
 ```
 
@@ -37,6 +41,18 @@ The `ESP32 Dev Module` FQBN used by this repo is:
 
 ```text
 esp32:esp32:esp32
+```
+
+## Install The ESP8266 Core
+
+```powershell
+arduino-cli core install esp8266:esp8266
+```
+
+Recommended ESP8266 FQBN for NodeMCU-style boards:
+
+```text
+esp8266:esp8266:nodemcuv2
 ```
 
 ## Install Required Libraries
@@ -72,6 +88,12 @@ Repo helper script:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/compile-firmware.ps1
+```
+
+ESP8266 helper example:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2 -SketchDir firmware/esp8266-shutter -OutputDir .arduino-build/firmware/esp8266-shutter
 ```
 
 ## Exported Binary Location

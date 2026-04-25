@@ -1,6 +1,5 @@
-import { NextResponse } from "next/server";
-
-import { getRegisteredDeviceById } from "@/lib/device-registry";
+import { AccessControlError, getAuthorizedDevice } from "@/lib/access-control";
+import { apiError, apiOk } from "@/lib/api-response";
 import {
   createFirmwareCheckResponse,
   recordDeviceUpdateEvent,
@@ -21,13 +20,16 @@ type RouteContext = {
 
 export async function GET(_request: Request, context: RouteContext) {
   const { deviceId } = await context.params;
-  const device = await getRegisteredDeviceById(deviceId);
+  let device;
 
-  if (!device) {
-    return NextResponse.json(
-      { ok: false, error: `Unknown deviceId: ${deviceId}` },
-      { status: 404 },
-    );
+  try {
+    ({ device } = await getAuthorizedDevice(deviceId));
+  } catch (error) {
+    if (error instanceof AccessControlError) {
+      return apiError(error.message, error.statusCode);
+    }
+
+    return apiError("Unable to authorize device access.", 500);
   }
 
   const liveStatus = await readLatestDeviceStatus(device).catch((error) => {
@@ -57,7 +59,7 @@ export async function GET(_request: Request, context: RouteContext) {
     console.error("Unable to record firmware availability event:", error);
   });
 
-  return NextResponse.json(result, {
+  return apiOk(result, {
     headers: {
       "Cache-Control": "no-store",
     },

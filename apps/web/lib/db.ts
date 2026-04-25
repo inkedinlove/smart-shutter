@@ -10,8 +10,12 @@ function hasNonEmptyValue(value: string | undefined): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+export function isDatabaseDisabled(): boolean {
+  return process.env.DISABLE_DATABASE?.trim().toLowerCase() === "true";
+}
+
 export function isDatabaseConfigured(): boolean {
-  return hasNonEmptyValue(process.env.DATABASE_URL);
+  return !isDatabaseDisabled() && hasNonEmptyValue(process.env.DATABASE_URL);
 }
 
 export function getDb(): PrismaClient | null {

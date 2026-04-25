@@ -4,11 +4,13 @@
     {
       "deviceId": "shutter-dev-001",
       "label": "Internal Test Shutter",
+      "board": "esp32",
       "status": "manual_mvp",
       "firmwareVersion": null,
       "commandTopic": "shutters/shutter-dev-001/commands",
       "statusTopic": "shutters/shutter-dev-001/status",
       "brokerProfile": "hivemq-dev",
+      "ownerProfileId": "demo-profile",
       "createdAt": "2026-04-23T00:00:00.000Z"
     }
   ]

@@ -10,6 +10,7 @@ import {
 import {
   clampPercent,
   createDefaultDeviceStatus,
+  isDeviceClaimState,
   isDeviceMode,
   isOtaState,
   type DeviceMode,
@@ -19,6 +20,7 @@ import {
 import { getDb, isDatabaseConfigured } from "@/lib/db";
 
 const STATUS_TIMEOUT_MS = 1000;
+const lastSeenByDeviceId = new Map<string, string>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -85,6 +87,41 @@ function parseOtaState(
   return undefined;
 }
 
+function recordLastSeenAt(deviceId: string, timestamp = new Date().toISOString()): string {
+  const normalizedDeviceId = deviceId.trim();
+
+  if (!normalizedDeviceId) {
+    return timestamp;
+  }
+
+  lastSeenByDeviceId.set(normalizedDeviceId, timestamp);
+  return timestamp;
+}
+
+function getRecordedLastSeenAt(deviceId: string): string | null {
+  const normalizedDeviceId = deviceId.trim();
+
+  if (!normalizedDeviceId) {
+    return null;
+  }
+
+  return lastSeenByDeviceId.get(normalizedDeviceId) ?? null;
+}
+
+function withRecordedLastSeen(status: DeviceStatus): DeviceStatus {
+  const receivedAt = new Date().toISOString();
+  const nextLastSeenAt = recordLastSeenAt(status.deviceId, receivedAt);
+
+  if (status.resolvedDeviceId && status.resolvedDeviceId !== status.deviceId) {
+    recordLastSeenAt(status.resolvedDeviceId, receivedAt);
+  }
+
+  return {
+    ...status,
+    lastSeenAt: nextLastSeenAt,
+  };
+}
+
 export function parseStatusMessage(
   message: string,
   fallbackDeviceId: string,
@@ -105,6 +142,13 @@ export function parseStatusMessage(
         typeof parsed.deviceId === "string" && parsed.deviceId.trim()
           ? parsed.deviceId
           : fallbackDeviceId,
+      resolvedDeviceId:
+        typeof parsed.resolvedDeviceId === "string" && parsed.resolvedDeviceId.trim()
+          ? parsed.resolvedDeviceId.trim()
+          : fallbackDeviceId,
+      claimState: isDeviceClaimState(parsed.claimState)
+        ? parsed.claimState
+        : "unknown",
       online,
       moving,
       deviceMode: parseDeviceMode(parsed.deviceMode, online, moving),
@@ -117,6 +161,9 @@ export function parseStatusMessage(
       firmwareVersion: parseOptionalString(parsed.firmwareVersion),
       deviceUptimeMs: parseOptionalNumber(parsed.deviceUptimeMs),
       rssi: parseOptionalNumber(parsed.rssi),
+      setupMode: parseOptionalBoolean(parsed.setupMode),
+      wifiConnected: parseOptionalBoolean(parsed.wifiConnected),
+      mqttConnected: parseOptionalBoolean(parsed.mqttConnected),
       otaEnabled,
       otaState: parseOtaState(parsed.otaState, otaEnabled),
       otaLastError: parseOptionalString(parsed.otaLastError),
@@ -159,7 +206,7 @@ export async function readLatestDeviceStatus(
         }
 
         cleanup();
-        resolve(nextStatus);
+        resolve(withRecordedLastSeen(nextStatus));
       };
 
       const cleanup = () => {
@@ -208,5 +255,8 @@ export async function getDeviceStatusSnapshot(
     return status;
   }
 
-  return createDefaultDeviceStatus(device.deviceId);
+  return {
+    ...createDefaultDeviceStatus(device.deviceId),
+    lastSeenAt: getRecordedLastSeenAt(device.deviceId),
+  };
 }

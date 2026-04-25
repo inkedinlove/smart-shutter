@@ -3,8 +3,9 @@ import Link from "next/link";
 const NAV_ITEMS = [
   { href: "/connect", label: "Setup" },
   { href: "/", label: "Dashboard" },
+  { href: "/devices", label: "Devices" },
+  { href: "/profile", label: "Profile" },
   { href: "/firmware", label: "Firmware" },
-  { href: "/flash", label: "Flash" },
 ] as const;
 
 type AppNavProps = {
@@ -16,7 +17,12 @@ type AppNavProps = {
 };
 
 export default function AppNav({ currentPath, extraLinks = [] }: AppNavProps) {
-  const items = [...NAV_ITEMS, ...extraLinks];
+  const items = [
+    ...NAV_ITEMS,
+    ...extraLinks.filter(
+      (extraLink) => !NAV_ITEMS.some((item) => item.href === extraLink.href),
+    ),
+  ];
 
   return (
     <nav className="flex flex-wrap items-center gap-5 sm:gap-6">

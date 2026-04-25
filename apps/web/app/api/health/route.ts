@@ -1,9 +1,10 @@
-import { NextResponse } from "next/server";
-
+import { apiOk } from "@/lib/api-response";
 import { getDb, isDatabaseConfigured } from "@/lib/db";
 import { listAvailableDevices } from "@/lib/device-registry";
 import { getLatestFirmwareRelease } from "@/lib/firmware-releases";
 import { isMqttConfigured } from "@/lib/mqtt";
+import { RATE_LIMITING_MODE } from "@/lib/rate-limit";
+import { getRuntimeValidation } from "@/lib/runtime-validation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +32,7 @@ async function getDatabaseMode(): Promise<DatabaseMode> {
 }
 
 export async function GET() {
+  const runtimeValidation = getRuntimeValidation();
   const [databaseMode, devices, latestRelease] = await Promise.all([
     getDatabaseMode(),
     listAvailableDevices().catch((error) => {
@@ -43,10 +45,17 @@ export async function GET() {
     }),
   ]);
 
-  return NextResponse.json(
+  return apiOk(
     {
       mqttConfigured: isMqttConfigured(),
       databaseMode,
+      runtimeMode: runtimeValidation.internalTestMode ? "internal" : "customer",
+      productionConfigReady: runtimeValidation.productionReady,
+      securityConfigReady:
+        runtimeValidation.internalTestMode || runtimeValidation.productionReady,
+      rateLimitingMode: RATE_LIMITING_MODE,
+      missingProductionConfig: runtimeValidation.missingProductionConfig,
+      customerModeBlockedReason: runtimeValidation.blockingReason,
       deviceRegistryAvailable: devices.length > 0,
       firmwareReleaseConfigured: Boolean(latestRelease),
       timestamp: new Date().toISOString(),

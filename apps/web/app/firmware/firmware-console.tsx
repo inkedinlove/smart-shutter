@@ -3,7 +3,12 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 
 import AppShell from "@/app/_components/app-shell";
-import { fetchWithShortTimeout } from "@/lib/client-fetch";
+import {
+  fetchWithShortTimeout,
+  readApiData,
+  redirectToLogin,
+  SessionRequiredError,
+} from "@/lib/client-fetch";
 import type { DeviceStatus, OtaState } from "@/lib/device";
 import type {
   FirmwareCheckResponse,
@@ -169,21 +174,7 @@ async function fetchDeviceStatus(deviceId: string): Promise<DeviceStatus> {
       timeoutMessage: "Device status timed out.",
     },
   );
-  const payload = (await response.json()) as unknown;
-
-  if (!response.ok) {
-    throw new Error(
-      isRecord(payload) && typeof payload.error === "string"
-        ? payload.error
-        : "Unable to load device status.",
-    );
-  }
-
-  if (!isDeviceStatus(payload)) {
-    throw new Error("The device status response was invalid.");
-  }
-
-  return payload;
+  return readApiData(response, isDeviceStatus, "Unable to load device status.");
 }
 
 async function recordCheckStartedEvent(
@@ -222,21 +213,11 @@ async function fetchUpdateManifest(
       timeoutMessage: "Loading update details timed out.",
     },
   );
-  const payload = (await response.json()) as unknown;
-
-  if (!response.ok) {
-    throw new Error(
-      isRecord(payload) && typeof payload.error === "string"
-        ? payload.error
-        : "Unable to load firmware manifest.",
-    );
-  }
-
-  if (!isFirmwareManifestResponse(payload)) {
-    throw new Error("The firmware manifest response was invalid.");
-  }
-
-  return payload;
+  return readApiData(
+    response,
+    isFirmwareManifestResponse,
+    "Unable to load firmware manifest.",
+  );
 }
 
 export default function FirmwareConsole({
@@ -246,6 +227,7 @@ export default function FirmwareConsole({
     deviceRegistryError,
     devices,
     isLoadingDevices,
+    reloadDevices,
     selectedDevice,
     selectedDeviceId,
     setSelectedDeviceId,
@@ -254,6 +236,7 @@ export default function FirmwareConsole({
   const [manifestResult, setManifestResult] =
     useState<FirmwareManifestResponse | null>(null);
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
+  const [isLoadingStatus, setIsLoadingStatus] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [isSendingDeviceCheck, setIsSendingDeviceCheck] = useState(false);
   const [isLoadingManifest, setIsLoadingManifest] = useState(false);
@@ -268,6 +251,8 @@ export default function FirmwareConsole({
     let isCancelled = false;
 
     async function loadStatus() {
+      setIsLoadingStatus(true);
+
       try {
         const status = await fetchDeviceStatus(selectedDeviceId);
 
@@ -277,9 +262,15 @@ export default function FirmwareConsole({
 
         startTransition(() => {
           setDeviceStatus(status);
+          setErrorMessage(null);
         });
       } catch (error) {
         if (isCancelled) {
+          return;
+        }
+
+        if (error instanceof SessionRequiredError) {
+          redirectToLogin(`/firmware?deviceId=${encodeURIComponent(selectedDeviceId)}`);
           return;
         }
 
@@ -287,7 +278,16 @@ export default function FirmwareConsole({
 
         startTransition(() => {
           setDeviceStatus(null);
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load device status.",
+          );
         });
+      } finally {
+        if (!isCancelled) {
+          setIsLoadingStatus(false);
+        }
       }
     }
 
@@ -316,19 +316,11 @@ export default function FirmwareConsole({
         }),
         fetchDeviceStatus(deviceId).catch(() => null),
       ]);
-      const payload = (await checkResponse.json()) as unknown;
-
-      if (!checkResponse.ok) {
-        throw new Error(
-          isRecord(payload) && typeof payload.error === "string"
-            ? payload.error
-            : "Unable to check for firmware updates.",
-        );
-      }
-
-      if (!isFirmwareCheckResponse(payload)) {
-        throw new Error("The firmware check response was invalid.");
-      }
+      const payload = await readApiData(
+        checkResponse,
+        isFirmwareCheckResponse,
+        "Unable to check for firmware updates.",
+      );
 
       const currentReportedVersion =
         latestStatus?.firmwareVersion ?? payload.currentVersion ?? null;
@@ -346,6 +338,11 @@ export default function FirmwareConsole({
         }
       });
     } catch (error) {
+      if (error instanceof SessionRequiredError) {
+        redirectToLogin(`/firmware?deviceId=${encodeURIComponent(deviceId)}`);
+        return;
+      }
+
       setErrorMessage(
         error instanceof Error
           ? error.message
@@ -368,6 +365,11 @@ export default function FirmwareConsole({
         setManifestResult(manifest);
       });
     } catch (error) {
+      if (error instanceof SessionRequiredError) {
+        redirectToLogin(`/firmware?deviceId=${encodeURIComponent(deviceId)}`);
+        return;
+      }
+
       setErrorMessage(
         error instanceof Error
           ? error.message
@@ -398,15 +400,12 @@ export default function FirmwareConsole({
         }),
         timeoutMessage: "Sending the device update check timed out.",
       });
-      const payload = (await response.json()) as unknown;
-
-      if (!response.ok) {
-        throw new Error(
-          isRecord(payload) && typeof payload.error === "string"
-            ? payload.error
-            : "Unable to send the device OTA check command.",
-        );
-      }
+      await readApiData(
+        response,
+        (value): value is { command: unknown } =>
+          isRecord(value) && "command" in value,
+        "Unable to send the device OTA check command.",
+      );
 
       startTransition(() => {
         setActionMessage(
@@ -416,6 +415,11 @@ export default function FirmwareConsole({
         );
       });
     } catch (error) {
+      if (error instanceof SessionRequiredError) {
+        redirectToLogin(`/firmware?deviceId=${encodeURIComponent(deviceId)}`);
+        return;
+      }
+
       setErrorMessage(
         error instanceof Error
           ? error.message
@@ -471,6 +475,18 @@ export default function FirmwareConsole({
     deviceReportsOtaReady &&
     releaseCheckShowsUpdate;
   const activeErrorMessage = errorMessage ?? deviceRegistryError;
+  const activeErrorNextAction = activeErrorMessage
+    ? activeErrorMessage.toLowerCase().includes("offline")
+      ? "Check power and Wi-Fi, then try again."
+      : activeErrorMessage.toLowerCase().includes("status")
+        ? "Wait a moment, then check the device again."
+        : "Retry the firmware check in a moment."
+    : null;
+  const deviceOffline =
+    Boolean(selectedDeviceId) &&
+    !isLoadingStatus &&
+    !activeErrorMessage &&
+    (!selectedDeviceStatus?.lastSeenAt || !selectedDeviceStatus.online);
 
   return (
     <AppShell
@@ -515,7 +531,11 @@ export default function FirmwareConsole({
               {formatVersion(currentVersion)}
             </div>
             <div className="mt-2 text-sm text-slate-400">
-              {selectedDeviceStatus?.firmwareVersion ? "Reported by device" : "Waiting for live status"}
+              {isLoadingStatus
+                ? "Checking live status"
+                : selectedDeviceStatus?.firmwareVersion
+                  ? "Reported by device"
+                  : "Waiting for live status"}
             </div>
           </div>
 
@@ -564,8 +584,48 @@ export default function FirmwareConsole({
           </div>
         </div>
 
+        {deviceOffline ? (
+          <div className="mt-6 rounded-[1rem] border border-amber-300/20 bg-amber-300/10 p-5 text-amber-50">
+            <div className="text-xs uppercase tracking-[0.24em] text-amber-100/80">
+              Device is offline
+            </div>
+            <p className="mt-2 text-sm leading-7">
+              Check power and Wi-Fi, then check the device again.
+            </p>
+          </div>
+        ) : null}
+
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-            <button
+          <button
+            type="button"
+            className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-4 text-base font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10 sm:flex-1"
+            onClick={() => {
+              reloadDevices();
+              if (selectedDeviceId) {
+                void fetchDeviceStatus(selectedDeviceId)
+                  .then((status) => {
+                    setDeviceStatus(status);
+                    setErrorMessage(null);
+                  })
+                  .catch((error: unknown) => {
+                    if (error instanceof SessionRequiredError) {
+                      redirectToLogin(`/firmware?deviceId=${encodeURIComponent(selectedDeviceId)}`);
+                      return;
+                    }
+
+                    setErrorMessage(
+                      error instanceof Error
+                        ? error.message
+                        : "Unable to load device status.",
+                    );
+                  });
+              }
+            }}
+          >
+            {isLoadingStatus ? "Checking device..." : "Check again"}
+          </button>
+
+          <button
             type="button"
             className="w-full rounded-xl bg-cyan-400 px-4 py-4 text-base font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-cyan-400/50 sm:flex-1"
             disabled={isLoadingDevices || isChecking || !selectedDeviceId}
@@ -742,16 +802,59 @@ export default function FirmwareConsole({
             <div className="text-xs uppercase tracking-[0.24em] text-slate-400">
               Update details
             </div>
-            <pre className="mt-4 overflow-x-auto rounded-[1rem] border border-white/10 bg-slate-950/80 p-5 text-sm leading-7 text-cyan-100">
-              <code>{JSON.stringify(manifestResult, null, 2)}</code>
-            </pre>
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                <div className="text-sm text-slate-400">Current version</div>
+                <div className="mt-2 text-lg font-semibold text-white">
+                  {formatVersion(manifestResult.currentVersion)}
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                <div className="text-sm text-slate-400">Latest version</div>
+                <div className="mt-2 text-lg font-semibold text-white">
+                  {formatVersion(manifestResult.latestVersion)}
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                <div className="text-sm text-slate-400">Board / Channel</div>
+                <div className="mt-2 text-lg font-semibold text-white">
+                  {manifestResult.board} / {manifestResult.channel}
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                <div className="text-sm text-slate-400">Update available</div>
+                <div className="mt-2 text-lg font-semibold text-white">
+                  {manifestResult.updateAvailable ? "Yes" : "No"}
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                <div className="text-sm text-slate-400">Artifact</div>
+                <div className="mt-2 wrap-anywhere font-mono text-sm text-cyan-100">
+                  {manifestResult.artifactUrl ?? "No artifact published"}
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                <div className="text-sm text-slate-400">SHA-256</div>
+                <div className="mt-2 wrap-anywhere font-mono text-sm text-cyan-100">
+                  {manifestResult.sha256 ?? "No hash published"}
+                </div>
+                <div className="mt-2 text-sm text-slate-400">
+                  {typeof manifestResult.sizeBytes === "number"
+                    ? `${manifestResult.sizeBytes.toLocaleString()} bytes`
+                    : "Size not published"}
+                </div>
+              </div>
+            </div>
           </div>
         ) : null}
 
         {activeErrorMessage ? (
-          <p className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
-            {activeErrorMessage}
-          </p>
+          <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
+            <div className="font-semibold text-amber-50">{activeErrorMessage}</div>
+            {activeErrorNextAction ? (
+              <div className="mt-1 text-amber-100/90">{activeErrorNextAction}</div>
+            ) : null}
+          </div>
         ) : null}
 
         {actionMessage ? (

@@ -12,9 +12,41 @@ $resolvedOutputDir = Join-Path $repoRoot $OutputDir
 $configPath = Join-Path $resolvedSketchDir "config.h"
 $configExamplePath = Join-Path $resolvedSketchDir "config.example.h"
 
+function Get-RepoRelativePath {
+  param(
+    [string]$BasePath,
+    [string]$TargetPath
+  )
+
+  $normalizedBasePath = [System.IO.Path]::GetFullPath($BasePath)
+  $normalizedTargetPath = [System.IO.Path]::GetFullPath($TargetPath)
+
+  if ($normalizedTargetPath.StartsWith($normalizedBasePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $relativePath = $normalizedTargetPath.Substring($normalizedBasePath.Length).TrimStart('\')
+    if ($relativePath) {
+      return $relativePath
+    }
+  }
+
+  return $normalizedTargetPath
+}
+
+$relativeSketchDir = Get-RepoRelativePath -BasePath $repoRoot.Path -TargetPath $resolvedSketchDir
+$relativeConfigPath = Get-RepoRelativePath -BasePath $repoRoot.Path -TargetPath $configPath
+
+$arduinoCliPath = $null
 $arduinoCli = Get-Command arduino-cli -ErrorAction SilentlyContinue
-if (-not $arduinoCli) {
-  throw "arduino-cli is not installed or not on PATH. See docs/arduino-cli-build.md for setup steps."
+if ($arduinoCli) {
+  $arduinoCliPath = $arduinoCli.Source
+} else {
+  $fallbackArduinoCliPath = "C:\Program Files\Arduino CLI\arduino-cli.exe"
+  if (Test-Path $fallbackArduinoCliPath) {
+    $arduinoCliPath = $fallbackArduinoCliPath
+  }
+}
+
+if (-not $arduinoCliPath) {
+  throw "arduino-cli was not found on PATH or at C:\Program Files\Arduino CLI\arduino-cli.exe. See docs/arduino-cli-build.md for setup steps."
 }
 
 if (-not (Test-Path $resolvedSketchDir)) {
@@ -27,7 +59,7 @@ if (-not (Test-Path $configPath)) {
   }
 
   Copy-Item $configExamplePath $configPath
-  Write-Host "Created firmware/esp32-shutter/config.h from config.example.h." -ForegroundColor Yellow
+  Write-Host "Created $relativeConfigPath from config.example.h." -ForegroundColor Yellow
   Write-Host "Update config.h with real WiFi and MQTT values before flashing hardware." -ForegroundColor Yellow
 }
 
@@ -41,11 +73,12 @@ $compileArgs = @(
 )
 
 Write-Host "Compiling Smart Shutter firmware..." -ForegroundColor Cyan
+Write-Host "Arduino CLI: $arduinoCliPath"
 Write-Host "FQBN: $Fqbn"
-Write-Host "Sketch: $resolvedSketchDir"
+Write-Host "Sketch: $relativeSketchDir"
 Write-Host "Output: $resolvedOutputDir"
 
-& $arduinoCli.Source @compileArgs
+& $arduinoCliPath @compileArgs
 
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE

@@ -1,0 +1,2 @@
+ALTER TABLE "Device"
+ADD COLUMN "board" TEXT NOT NULL DEFAULT 'esp32';

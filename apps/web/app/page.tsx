@@ -3,7 +3,12 @@
 import { startTransition, useEffect, useRef, useState } from "react";
 
 import AppShell from "@/app/_components/app-shell";
-import { fetchWithShortTimeout } from "@/lib/client-fetch";
+import {
+  fetchWithShortTimeout,
+  readApiData,
+  redirectToLogin,
+  SessionRequiredError,
+} from "@/lib/client-fetch";
 import {
   createDefaultDeviceStatus,
   type DeviceCommand,
@@ -123,6 +128,7 @@ export default function Home() {
     deviceRegistryError,
     devices,
     isLoadingDevices,
+    reloadDevices,
     selectedDevice,
     selectedDeviceId,
     setSelectedDeviceId,
@@ -130,6 +136,7 @@ export default function Home() {
   const [status, setStatus] = useState<DeviceStatus>(
     createDefaultDeviceStatus(""),
   );
+  const [isLoadingStatus, setIsLoadingStatus] = useState(false);
   const [sliderValue, setSliderValue] = useState(50);
   const [isSending, setIsSending] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -150,6 +157,8 @@ export default function Home() {
     let isCancelled = false;
 
     async function loadStatus() {
+      setIsLoadingStatus(true);
+
       try {
         const response = await fetchWithShortTimeout(
           `/api/device/status?deviceId=${encodeURIComponent(selectedDeviceId)}`,
@@ -158,19 +167,11 @@ export default function Home() {
             timeoutMessage: "Device status timed out.",
           },
         );
-        const payload = (await response.json()) as unknown;
-
-        if (!response.ok) {
-          throw new Error(
-            isRecord(payload) && typeof payload.error === "string"
-              ? payload.error
-              : "Unable to load device status.",
-          );
-        }
-
-        if (!isDeviceStatus(payload)) {
-          throw new Error("The device status response was invalid.");
-        }
+        const payload = await readApiData(
+          response,
+          isDeviceStatus,
+          "Unable to load device status.",
+        );
 
         if (isCancelled) {
           return;
@@ -197,6 +198,11 @@ export default function Home() {
           return;
         }
 
+        if (error instanceof SessionRequiredError) {
+          redirectToLogin("/");
+          return;
+        }
+
         startTransition(() => {
           setStatus(createDefaultDeviceStatus(selectedDeviceId));
           setErrorMessage(
@@ -205,6 +211,10 @@ export default function Home() {
               : "Status polling is unavailable right now.",
           );
         });
+      } finally {
+        if (!isCancelled) {
+          setIsLoadingStatus(false);
+        }
       }
     }
 
@@ -251,15 +261,12 @@ export default function Home() {
         body: JSON.stringify(requestBody),
         timeoutMessage: "Sending the command timed out.",
       });
-
-      const payload = (await response.json()) as {
-        command?: DeviceCommand;
-        error?: string;
-      };
-
-      if (!response.ok) {
-        throw new Error(payload.error || "Unable to send the command.");
-      }
+      const payload = await readApiData(
+        response,
+        (value): value is { command: DeviceCommand } =>
+          isRecord(value) && "command" in value && isRecord(value.command),
+        "Unable to send the command.",
+      );
 
       if (payload.command?.type === "STOP") {
         setFeedback(`Sent STOP command to ${selectedDeviceId}.`);
@@ -269,6 +276,11 @@ export default function Home() {
         setFeedback(`Sent command to ${selectedDeviceId}.`);
       }
     } catch (error) {
+      if (error instanceof SessionRequiredError) {
+        redirectToLogin("/");
+        return;
+      }
+
       setErrorMessage(
         error instanceof Error ? error.message : "Unable to send the command.",
       );
@@ -321,7 +333,7 @@ export default function Home() {
               Connection
             </div>
             <div className="mt-3 text-xl font-semibold text-white">
-              {getConnectionLabel(status)}
+              {isLoadingStatus ? "Checking" : getConnectionLabel(status)}
             </div>
             <div className="mt-2 text-sm text-slate-400">
               Last seen {formatLastSeen(status.lastSeenAt)}
@@ -532,9 +544,22 @@ export default function Home() {
             ) : null}
 
             {activeErrorMessage ? (
-              <p className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
-                {activeErrorMessage}
-              </p>
+              <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
+                <div className="font-semibold text-amber-50">{activeErrorMessage}</div>
+                <div className="mt-1 text-amber-100/90">
+                  Check power and Wi-Fi, then try the device again.
+                </div>
+                <button
+                  type="button"
+                  className="mt-3 inline-flex rounded-lg border border-amber-200/20 bg-black/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-amber-50 transition hover:bg-black/30"
+                  onClick={() => {
+                    reloadDevices();
+                    window.location.reload();
+                  }}
+                >
+                  Retry connection
+                </button>
+              </div>
             ) : null}
           </div>
         </div>

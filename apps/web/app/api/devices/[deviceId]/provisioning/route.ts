@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-
+import { requireAdminAccess, AdminAuthorizationError } from "@/lib/admin";
+import { apiError, apiOk } from "@/lib/api-response";
 import { getRegisteredDeviceById } from "@/lib/device-registry";
 import { createProvisioningData } from "@/lib/devices";
 import { getPublicMqttConfig } from "@/lib/mqtt";
@@ -12,18 +12,25 @@ type RouteContext = {
   }>;
 };
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
+  try {
+    await requireAdminAccess(request);
+  } catch (error) {
+    if (error instanceof AdminAuthorizationError) {
+      return apiError(error.message, error.statusCode);
+    }
+
+    return apiError("Unable to authorize provisioning access.", 500);
+  }
+
   const { deviceId } = await context.params;
   const device = await getRegisteredDeviceById(deviceId);
 
   if (!device) {
-    return NextResponse.json(
-      { ok: false, error: `Unknown deviceId: ${deviceId}` },
-      { status: 404 },
-    );
+    return apiError(`Unknown deviceId: ${deviceId}`, 404);
   }
 
-  return NextResponse.json(createProvisioningData(device, getPublicMqttConfig()), {
+  return apiOk(createProvisioningData(device, getPublicMqttConfig()), {
     headers: {
       "Cache-Control": "no-store",
     },

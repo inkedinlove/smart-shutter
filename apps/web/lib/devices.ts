@@ -1,15 +1,26 @@
 import devicesRegistry from "@/devices/devices.json";
 
 export type BrokerProfile = "hivemq-dev";
+export const DEVICE_BOARD_VALUES = ["esp32", "esp8266"] as const;
+export type DeviceBoard = (typeof DEVICE_BOARD_VALUES)[number];
+
+export type ProfileSummary = {
+  profileId: string;
+  displayName: string;
+  email: string | null;
+};
 
 export type RegisteredDevice = {
   deviceId: string;
   label: string;
+  board: DeviceBoard;
   status: string;
   firmwareVersion: string | null;
   commandTopic: string;
   statusTopic: string;
   brokerProfile: BrokerProfile;
+  ownerProfileId?: string | null;
+  ownerProfile?: ProfileSummary | null;
   createdAt: string;
 };
 
@@ -21,6 +32,7 @@ export type PublicBrokerConnection = {
 
 export type DeviceProvisioningData = {
   deviceId: string;
+  board: DeviceBoard;
   commandTopic: string;
   statusTopic: string;
   mqttHost: string;
@@ -73,12 +85,14 @@ export function createFirmwareDefinesPreview(
   broker: PublicBrokerConnection,
 ): string {
   return [
+    `// Board: ${device.board}`,
     `#define DEVICE_ID "${device.deviceId}"`,
     `#define FIRMWARE_VERSION "${DEFAULT_FIRMWARE_VERSION}"`,
     `#define MQTT_HOST "${broker.mqttHost}"`,
     `#define MQTT_PORT ${broker.mqttPort}`,
     '#define MQTT_USERNAME "PASTE_USERNAME"',
     '#define MQTT_PASSWORD "PASTE_PASSWORD"',
+    `#define MQTT_CLIENT_ID "smart-shutter-${device.deviceId}"`,
     `#define COMMAND_TOPIC "${device.commandTopic}"`,
     `#define STATUS_TOPIC "${device.statusTopic}"`,
     "#define ENABLE_OTA_UPDATES false",
@@ -93,6 +107,7 @@ export function createProvisioningData(
 ): DeviceProvisioningData {
   return {
     deviceId: device.deviceId,
+    board: device.board,
     commandTopic: device.commandTopic,
     statusTopic: device.statusTopic,
     mqttHost: broker.mqttHost,

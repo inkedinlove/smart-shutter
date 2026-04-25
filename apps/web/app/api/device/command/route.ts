@@ -1,7 +1,8 @@
-import { NextResponse } from "next/server";
 import type { MqttClient } from "mqtt";
 
-import { getRegisteredDeviceById } from "@/lib/device-registry";
+import { AccessControlError, getAuthorizedDevice } from "@/lib/access-control";
+import { apiError, apiOk } from "@/lib/api-response";
+import { recordDeviceCommandAudit } from "@/lib/device-command-audit";
 import {
   DEFAULT_SAFE_ALLOWED_MAX_PERCENT_STEP,
   MAX_NUDGE_AMOUNT,
@@ -15,6 +16,11 @@ import {
   createMqttClient,
   publishMqttMessage,
 } from "@/lib/mqtt";
+import {
+  assertRateLimit,
+  buildRateLimitKey,
+  RateLimitError,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -43,16 +49,27 @@ function requiresLiveStatus(commandType: string): boolean {
   return commandType !== "STOP" && commandType !== "CHECK_UPDATE";
 }
 
+async function auditCommand(input: {
+  deviceId: string;
+  actorProfileId?: string | null;
+  commandType: string;
+  result: string;
+  detail?: string | null;
+}) {
+  try {
+    await recordDeviceCommandAudit(input);
+  } catch {
+    console.error("Unable to record device command audit.");
+  }
+}
+
 export async function POST(request: Request) {
   let parsedBody: unknown;
 
   try {
     parsedBody = await request.json();
   } catch {
-    return NextResponse.json(
-      { ok: false, error: "Request body must be valid JSON." },
-      { status: 400 },
-    );
+    return apiError("Request body must be valid JSON.", 400);
   }
 
   const rawType = (parsedBody as { type?: unknown })?.type;
@@ -61,19 +78,50 @@ export async function POST(request: Request) {
   const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim() : "";
 
   if (!deviceId) {
-    return NextResponse.json(
-      { ok: false, error: "The `deviceId` field is required." },
-      { status: 400 },
-    );
+    return apiError("The `deviceId` field is required.", 400);
   }
 
-  const device = await getRegisteredDeviceById(deviceId);
+  let context;
+  let device;
+  try {
+    ({ context, device } = await getAuthorizedDevice(deviceId));
+  } catch (error) {
+    if (error instanceof AccessControlError) {
+      return apiError(error.message, error.statusCode);
+    }
 
-  if (!device) {
-    return NextResponse.json(
-      { ok: false, error: `Unknown deviceId: ${deviceId}` },
-      { status: 404 },
-    );
+    return apiError("Unable to authorize device access.", 500);
+  }
+
+  const actorProfileId =
+    context.mode === "customer" ? context.profile.profileId : null;
+
+  try {
+    assertRateLimit({
+      bucket: "device-command-publish",
+      key: buildRateLimitKey(actorProfileId ?? context.mode, device.deviceId),
+      limit: 12,
+      windowMs: 30_000,
+      message:
+        "Too many commands were sent to this shutter. Wait a moment, then try again.",
+    });
+  } catch (error) {
+    if (error instanceof RateLimitError) {
+      await auditCommand({
+        deviceId: device.deviceId,
+        actorProfileId,
+        commandType,
+        result: "rate_limited",
+      });
+
+      return apiError(error.message, error.statusCode, {
+        headers: {
+          "Retry-After": String(error.retryAfterSeconds),
+        },
+      });
+    }
+
+    return apiError("Unable to validate the command rate limit right now.", 503);
   }
 
   let liveStatus: DeviceStatus | null = null;
@@ -83,27 +131,33 @@ export async function POST(request: Request) {
       const latestStatus = await getDeviceStatusSnapshot(device);
 
       if (!latestStatus.lastSeenAt || !latestStatus.online) {
-        return NextResponse.json(
-          {
-            ok: false,
-            error:
-              "The device must be online and reporting status before sending this command.",
-          },
-          { status: 409 },
+        await auditCommand({
+          deviceId: device.deviceId,
+          actorProfileId,
+          commandType,
+          result: "blocked_offline",
+        });
+
+        return apiError(
+          "The device is offline. Check power and Wi-Fi, then try again.",
+          409,
         );
       }
 
       liveStatus = latestStatus;
-    } catch (error) {
-      console.error("Unable to load live status for command safety checks:", error);
+    } catch {
+      console.error("Unable to load live status for command safety checks.");
 
-      return NextResponse.json(
-        {
-          ok: false,
-          error:
-            "Live device status is unavailable right now. Try again after the device reports in.",
-        },
-        { status: 503 },
+      await auditCommand({
+        deviceId: device.deviceId,
+        actorProfileId,
+        commandType,
+        result: "status_unavailable",
+      });
+
+      return apiError(
+        "Live device status is unavailable right now. Try again after the device reports in.",
+        503,
       );
     }
   }
@@ -130,33 +184,32 @@ export async function POST(request: Request) {
     const amount = (parsedBody as { amount?: unknown })?.amount;
 
     if (typeof amount !== "number" || !Number.isFinite(amount)) {
-      return NextResponse.json(
-        { ok: false, error: "The `amount` field must be a number." },
-        { status: 400 },
-      );
+      return apiError("The `amount` field must be a number.", 400);
     }
 
     const normalizedAmount = Math.round(amount);
 
     if (normalizedAmount < 1 || normalizedAmount > MAX_NUDGE_AMOUNT) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: `The \`amount\` field must be between 1 and ${MAX_NUDGE_AMOUNT}.`,
-        },
-        { status: 400 },
+      return apiError(
+        `The \`amount\` field must be between 1 and ${MAX_NUDGE_AMOUNT}.`,
+        400,
       );
     }
 
     const allowedMaxPercentStep = getAllowedMaxPercentStep(liveStatus);
 
     if (normalizedAmount > allowedMaxPercentStep) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: `This device is currently limited to ${allowedMaxPercentStep}% per move while safe setup mode is active.`,
-        },
-        { status: 409 },
+      await auditCommand({
+        deviceId: device.deviceId,
+        actorProfileId,
+        commandType,
+        result: "blocked_safety",
+        detail: `allowedMaxPercentStep=${allowedMaxPercentStep}`,
+      });
+
+      return apiError(
+        `This device is currently limited to ${allowedMaxPercentStep}% per move while safe setup mode is active.`,
+        409,
       );
     }
 
@@ -186,41 +239,42 @@ export async function POST(request: Request) {
     const value = (parsedBody as { value?: unknown })?.value;
 
     if (typeof value !== "number" || !Number.isFinite(value)) {
-      return NextResponse.json(
-        { ok: false, error: "The `value` field must be a number." },
-        { status: 400 },
-      );
+      return apiError("The `value` field must be a number.", 400);
     }
 
     if (value < 0 || value > 100) {
-      return NextResponse.json(
-        { ok: false, error: "The `value` field must be between 0 and 100." },
-        { status: 400 },
-      );
+      return apiError("The `value` field must be between 0 and 100.", 400);
     }
 
     const normalizedValue = Math.round(value);
 
     if (liveStatus?.safetyMode === true && liveStatus.calibrationComplete !== true) {
       if (normalizedValue === 100) {
-        return NextResponse.json(
-          {
-            ok: false,
-            error:
-              "100% is blocked until safe calibration is complete on the attached shutter.",
-          },
-          { status: 409 },
+        await auditCommand({
+          deviceId: device.deviceId,
+          actorProfileId,
+          commandType,
+          result: "blocked_calibration",
+          detail: "full_open_blocked",
+        });
+
+        return apiError(
+          "100% is blocked until safe calibration is complete on the attached shutter.",
+          409,
         );
       }
 
       if (typeof liveStatus.estimatedPercent !== "number") {
-        return NextResponse.json(
-          {
-            ok: false,
-            error:
-              "The device must report its current position before larger moves are allowed.",
-          },
-          { status: 409 },
+        await auditCommand({
+          deviceId: device.deviceId,
+          actorProfileId,
+          commandType,
+          result: "blocked_position_unknown",
+        });
+
+        return apiError(
+          "The device must report its current position before larger moves are allowed.",
+          409,
         );
       }
 
@@ -228,12 +282,17 @@ export async function POST(request: Request) {
       const requestedDelta = Math.abs(normalizedValue - liveStatus.estimatedPercent);
 
       if (requestedDelta > allowedMaxPercentStep) {
-        return NextResponse.json(
-          {
-            ok: false,
-            error: `Safe setup mode only allows moves up to ${allowedMaxPercentStep}% per command until calibration is complete.`,
-          },
-          { status: 409 },
+        await auditCommand({
+          deviceId: device.deviceId,
+          actorProfileId,
+          commandType,
+          result: "blocked_safety",
+          detail: `requestedDelta=${requestedDelta},allowedMaxPercentStep=${allowedMaxPercentStep}`,
+        });
+
+        return apiError(
+          `Safe setup mode only allows moves up to ${allowedMaxPercentStep}% per command until calibration is complete.`,
+          409,
         );
       }
     }
@@ -247,13 +306,9 @@ export async function POST(request: Request) {
       source: "web",
     };
   } else {
-    return NextResponse.json(
-      {
-        ok: false,
-        error:
-          "The `type` field must be one of `SET_PERCENT`, `STOP`, `CHECK_UPDATE`, `NUDGE_OPEN`, `NUDGE_CLOSE`, `SET_CURRENT_AS_CLOSED`, `SET_CURRENT_AS_OPEN`, `MARK_CALIBRATION_COMPLETE`, `LOCK_MOVEMENT`, or `UNLOCK_MOVEMENT`.",
-      },
-      { status: 400 },
+    return apiError(
+      "The `type` field must be one of `SET_PERCENT`, `STOP`, `CHECK_UPDATE`, `NUDGE_OPEN`, `NUDGE_CLOSE`, `SET_CURRENT_AS_CLOSED`, `SET_CURRENT_AS_OPEN`, `MARK_CALIBRATION_COMPLETE`, `LOCK_MOVEMENT`, or `UNLOCK_MOVEMENT`.",
+      400,
     );
   }
 
@@ -270,8 +325,15 @@ export async function POST(request: Request) {
       { qos: 1 },
     );
 
-    return NextResponse.json(
-      { ok: true, command },
+    await auditCommand({
+      deviceId: device.deviceId,
+      actorProfileId,
+      commandType: command.type,
+      result: "published",
+    });
+
+    return apiOk(
+      { command },
       {
         headers: {
           "Cache-Control": "no-store",
@@ -279,12 +341,16 @@ export async function POST(request: Request) {
       },
     );
   } catch (error) {
-    console.error("MQTT command publish failed:", error);
+    await auditCommand({
+      deviceId: device.deviceId,
+      actorProfileId,
+      commandType,
+      result: "publish_failed",
+    });
 
-    return NextResponse.json(
-      { ok: false, error: sanitizeErrorMessage(error) },
-      { status: 503 },
-    );
+    console.error("MQTT command publish failed.");
+
+    return apiError(sanitizeErrorMessage(error), 503);
   } finally {
     if (client) {
       await closeMqttClient(client);

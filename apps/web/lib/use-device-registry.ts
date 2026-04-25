@@ -2,7 +2,12 @@
 
 import { startTransition, useEffect, useMemo, useState } from "react";
 
-import { fetchWithShortTimeout } from "@/lib/client-fetch";
+import {
+  fetchWithShortTimeout,
+  readApiData,
+  redirectToLogin,
+  SessionRequiredError,
+} from "@/lib/client-fetch";
 import type { RegisteredDevice } from "@/lib/devices";
 
 const SELECTED_DEVICE_STORAGE_KEY = "smart-shutter:selected-device-id";
@@ -28,6 +33,7 @@ export function useDeviceRegistry() {
   const [devices, setDevices] = useState<RegisteredDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceIdState] = useState("");
   const [isLoadingDevices, setIsLoadingDevices] = useState(true);
+  const [reloadToken, setReloadToken] = useState(0);
   const [deviceRegistryError, setDeviceRegistryError] = useState<string | null>(
     null,
   );
@@ -43,19 +49,11 @@ export function useDeviceRegistry() {
           cache: "no-store",
           timeoutMessage: "Loading devices timed out.",
         });
-        const payload = (await response.json()) as unknown;
-
-        if (!response.ok) {
-          throw new Error(
-            isRecord(payload) && typeof payload.error === "string"
-              ? payload.error
-              : "Unable to load devices.",
-          );
-        }
-
-        if (!isDevicesResponse(payload)) {
-          throw new Error("The device registry response was invalid.");
-        }
+        const payload = await readApiData(
+          response,
+          isDevicesResponse,
+          "Unable to load devices.",
+        );
 
         if (isCancelled) {
           return;
@@ -86,6 +84,11 @@ export function useDeviceRegistry() {
           return;
         }
 
+        if (error instanceof SessionRequiredError) {
+          redirectToLogin();
+          return;
+        }
+
         startTransition(() => {
           setDeviceRegistryError(
             error instanceof Error ? error.message : "Unable to load devices.",
@@ -103,7 +106,7 @@ export function useDeviceRegistry() {
     return () => {
       isCancelled = true;
     };
-  }, []);
+  }, [reloadToken]);
 
   useEffect(() => {
     if (!selectedDeviceId || typeof window === "undefined") {
@@ -126,6 +129,9 @@ export function useDeviceRegistry() {
     deviceRegistryError,
     devices,
     isLoadingDevices,
+    reloadDevices: () => {
+      setReloadToken((current) => current + 1);
+    },
     selectedDevice,
     selectedDeviceId,
     setSelectedDeviceId: setSelectedDeviceIdState,

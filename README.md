@@ -1,11 +1,26 @@
 # Smart Shutter MVP
 
-Smart Shutter is an MVP for remotely positioning a shutter from a deployed website. The current stack uses a Next.js web app to publish MQTT commands to HiveMQ Cloud and an ESP32 firmware sketch to drive a 28BYJ-48 stepper motor through a ULN2003 board.
+Smart Shutter is an MQTT-connected shutter platform with a customer-facing web
+app and ESP32 plus ESP8266 firmware targets. The current stack uses a Next.js
+app to publish MQTT commands to HiveMQ Cloud and board-specific firmware
+sketches to drive a 28BYJ-48 stepper motor through a ULN2003 board.
 
 The recommended user entry point is now `/connect`, which guides a user through
 Connect Device -> Check Firmware -> Update Firmware -> Safe Calibration ->
 Setup Complete -> Test Motor while still respecting the current manual flashing
 reality.
+
+The customer-ready setup direction is now QR claim first, then local Wi-Fi
+setup through factory firmware, then `/connect` once the device is online.
+
+The production ownership model is now:
+
+- one customer account
+- one profile
+- many devices
+
+Customer mode now uses Auth.js-backed sign-in and ownership checks. Internal
+demo/simulator behavior remains available only when `INTERNAL_TEST_MODE=true`.
 
 Use `/api/health` as the quick preflight endpoint before the first remote live
 test.
@@ -19,21 +34,23 @@ followed by the first attached-shutter calibration pass with
 
 ## Architecture
 
-- `apps/web`: Next.js App Router dashboard, setup console, firmware console, API routes for publishing commands and reading retained device status over MQTT, and a Prisma/Neon-ready database layer with static JSON fallback.
-- `firmware/esp32-shutter`: ESP32 Arduino sketch that connects to WiFi, subscribes to command messages, drives the stepper motor, publishes retained status updates, and can optionally expose a local fallback page behind a compile-time flag.
+- `apps/web`: Next.js App Router dashboard, login/profile/devices pages, setup console, firmware console, API routes for publishing commands and reading retained device status over MQTT, Auth.js-based account access, and a Prisma/Neon-ready database layer with explicit internal fallback mode.
+- `firmware/esp32-shutter`: ESP32 Arduino sketch for the main browser-flash and recovery path.
+- `firmware/esp8266-shutter`: ESP8266 Arduino sketch that keeps the same MQTT/status contract for NodeMCU-style boards that need manual USB flashing.
 - `docs`: wiring, internal setup notes, MVP testing notes, provisioning notes, firmware update notes, and comparison notes for the older ESP8266 prototype.
 
 Current MQTT flow:
 
-1. The internal device registry reads from Neon/Postgres through Prisma when `DATABASE_URL` is configured, and falls back to `apps/web/devices/devices.json` when it is not.
-2. The dashboard selects a device and calls `/api/device/command` with `deviceId` plus either `SET_PERCENT` or `STOP`.
-3. The Firmware Console can also send a guarded `CHECK_UPDATE` command over MQTT when you want the ESP32 to attempt an experimental OTA check.
-4. The server-only route looks up the device topics from the registry and publishes to HiveMQ Cloud over `mqtts://` on port `8883`.
-5. The ESP32 subscribes to the command topic, maps requested percentages to stepper travel steps, and drives the motor.
-6. The ESP32 publishes retained status messages including `deviceMode`, estimated percent, movement state, firmware version, uptime, and RSSI.
-7. `/api/device/status?deviceId=...` briefly subscribes to the registry-derived status topic, returns the latest snapshot, and records the reported firmware version in the database when available.
+1. Customer mode reads accounts, profiles, and devices from Neon/Postgres through Prisma and requires ownership before exposing device APIs.
+2. Internal test mode can still fall back to static JSON plus the internal demo profile for simulator and local testing only.
+3. The dashboard selects an owned device and calls `/api/device/command` with `deviceId` plus either `SET_PERCENT` or `STOP`.
+4. The Firmware Console can also send a guarded `CHECK_UPDATE` command over MQTT when you want the ESP32 to attempt an experimental OTA check.
+5. The server-only route looks up the device topics from the authorized registry entry and publishes to HiveMQ Cloud over `mqtts://` on port `8883`.
+6. The ESP32 subscribes to the command topic, maps requested percentages to stepper travel steps, and drives the motor.
+7. The ESP32 publishes retained status messages including `deviceMode`, estimated percent, movement state, firmware version, uptime, and RSSI.
+8. `/api/device/status?deviceId=...` briefly subscribes to the authorized status topic, returns the latest snapshot, and records the reported firmware version in the database when available.
 
-The older ESP8266 local-only prototype is documented in [docs/legacy-prototype-comparison.md](docs/legacy-prototype-comparison.md). It remains useful as a reference for future captive onboarding and local fallback workflows, but the main MVP path is still deployed website -> MQTT broker -> ESP32.
+The older ESP8266 local-only prototype is documented in [docs/legacy-prototype-comparison.md](docs/legacy-prototype-comparison.md). It remains useful as a reference for future captive onboarding and local fallback workflows. The repo now also includes a modern MQTT-compatible ESP8266 firmware target in [docs/esp8266-firmware-build.md](docs/esp8266-firmware-build.md).
 
 ## Local Development
 
@@ -71,22 +88,35 @@ MQTT_HOST=
 MQTT_PORT=8883
 MQTT_USERNAME=
 MQTT_PASSWORD=
+INTERNAL_TEST_MODE=true
+DISABLE_DATABASE=false
 DATABASE_URL=
+AUTH_SECRET=
+ADMIN_EMAILS=
 FIRMWARE_UPDATE_CHANNEL=stable
 PUBLIC_APP_BASE_URL=
 ADMIN_TOKEN=
 ENABLE_EXPERIMENTAL_OTA_UI=false
+ALEXA_SKILL_ENABLED=false
+ALEXA_CLIENT_ID=
+ALEXA_CLIENT_SECRET=
 ```
 
 Where these come from:
 
 - `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, and `MQTT_PASSWORD` come from the HiveMQ Cloud broker.
+- `INTERNAL_TEST_MODE=true` keeps the simulator, internal demo profile, and static registry fallback available. Set it to `false` in customer/production mode.
+- `DISABLE_DATABASE=true` forces the app to use the static fallback model even when `DATABASE_URL` is present.
 - `DATABASE_URL` comes from Neon Postgres when you want the database-backed registry and firmware release flow.
+- `AUTH_SECRET` secures customer sessions.
+- `ADMIN_EMAILS` is an optional comma-separated list of emails that should receive the `admin` role when accounts are created.
 - `FIRMWARE_UPDATE_CHANNEL` selects the channel used by firmware update checks, for example `stable`.
 - `PUBLIC_APP_BASE_URL` is the base app URL used when validating whether a firmware artifact URL is safe to expose in browser responses.
 - `ADMIN_TOKEN` protects internal firmware release publishing for the MVP.
 - `ENABLE_EXPERIMENTAL_OTA_UI` is a dev-only gate that keeps the Firmware Console's `Update Firmware` action disabled unless you explicitly turn it on.
-- Device IDs, labels, command topics, and status topics come from our internal registry layer, backed by Prisma when available and by static JSON fallback otherwise.
+- `ALEXA_SKILL_ENABLED` enables the internal Alexa Smart Home scaffold route.
+- `ALEXA_CLIENT_ID` and `ALEXA_CLIENT_SECRET` are reserved for future Alexa account-linking setup.
+- Device IDs, labels, command topics, status topics, and ownership come from the profile/device layer, backed by Prisma in customer mode and by explicit fallback only in internal test mode.
 - The `/setup` page and provisioning routes generate copy-ready non-secret device config from that registry.
 
 This is the current bridge between manual firmware setup and future automated provisioning.
@@ -106,8 +136,68 @@ npm run db:seed
 Notes:
 
 - `DATABASE_URL` must be set before running the Prisma commands above.
-- `db:seed` creates the default `shutter-dev-001` device plus an initial `0.1.0-dev` firmware release entry.
-- If `DATABASE_URL` is not set, the app continues using the committed JSON registry so local MQTT development still works.
+- `db:seed` creates the default device and firmware release entry, and seeds the internal demo profile only when `INTERNAL_TEST_MODE=true`.
+- If `DATABASE_URL` is not set, or `DISABLE_DATABASE=true`, customer mode should not be used. Internal test mode can still use the committed JSON fallback for simulator and local MQTT development.
+
+## Auth Setup
+
+Customer mode uses Auth.js credentials sign-in.
+
+Minimum setup:
+
+1. Set `INTERNAL_TEST_MODE=false`
+2. Set `DATABASE_URL`
+3. Set `AUTH_SECRET`
+4. Run Prisma generate, migrate, and seed
+5. Open `/login`
+6. Create a customer account
+
+Optional admin bootstrap:
+
+- set `ADMIN_EMAILS` to a comma-separated list before creating the account
+- any matching account is created with the `admin` role
+
+Related references:
+
+- [docs/production-customer-architecture.md](docs/production-customer-architecture.md)
+- [docs/profile-device-ownership.md](docs/profile-device-ownership.md)
+- [docs/security-boundaries.md](docs/security-boundaries.md)
+
+## Customer Mode vs Internal Test Mode
+
+Customer mode:
+
+- `INTERNAL_TEST_MODE=false`
+- requires `DATABASE_URL`
+- requires `DISABLE_DATABASE=false`
+- requires `AUTH_SECRET`
+- requires sign-in
+- scopes device APIs to the signed-in customer
+
+Internal test mode:
+
+- `INTERNAL_TEST_MODE=true`
+- can keep using the simulator and static registry fallback
+- keeps `/setup` and provisioning helpers useful for internal work
+- should not be treated as customer production behavior
+
+## Security Posture
+
+Current hardening:
+
+- customer mode fails closed without session-backed ownership checks
+- admin mutations require admin role or `ADMIN_TOKEN`
+- claim codes expire, normalize input, and are single-use
+- command publishing is rate-limited and audited
+- firmware release publishing requires admin access, HTTPS artifact URLs, and
+  SHA-256 validation
+- `/api/health` reports security readiness without exposing secret values
+
+Security references:
+
+- [docs/security-audit.md](docs/security-audit.md)
+- [docs/security-hardening-checklist.md](docs/security-hardening-checklist.md)
+- [docs/security-boundaries.md](docs/security-boundaries.md)
 
 ## Vercel Deployment
 
@@ -117,6 +207,49 @@ Notes:
 4. After deployment, use the dashboard API routes to publish commands to HiveMQ Cloud.
 
 The MQTT credentials stay server-side because the browser only talks to the Next.js API routes.
+
+## Customer-Mode Deployment Checklist
+
+Before customer launch:
+
+1. Set `INTERNAL_TEST_MODE=false`
+2. Set `DISABLE_DATABASE=false`
+3. Configure:
+   - `DATABASE_URL`
+   - `AUTH_SECRET`
+   - `MQTT_HOST`
+   - `MQTT_PORT`
+   - `MQTT_USERNAME`
+   - `MQTT_PASSWORD`
+   - `ADMIN_TOKEN`
+   - `PUBLIC_APP_BASE_URL`
+4. Run:
+
+```powershell
+cd apps/web
+npm run db:generate
+npm run db:migrate
+npm run db:seed
+```
+
+5. Create an admin account using an email listed in `ADMIN_EMAILS`
+6. Test:
+   - `/api/health`
+   - `/admin/claims`
+   - `/claim`
+   - `/devices`
+   - `/connect`
+7. Confirm `/api/health` reports:
+   - `runtimeMode: customer`
+   - `productionConfigReady: true`
+   - no `missingProductionConfig`
+   - no `customerModeBlockedReason`
+
+Deployment reference:
+
+- [docs/production-deploy-checklist.md](docs/production-deploy-checklist.md)
+- [docs/customer-ready-v1-checklist.md](docs/customer-ready-v1-checklist.md)
+- [docs/support-playbook.md](docs/support-playbook.md)
 
 ## Connect Wizard
 
@@ -142,8 +275,65 @@ Current behavior:
 Related reference:
 
 - [docs/connect-wizard.md](docs/connect-wizard.md)
+- [docs/customer-ready-v1-checklist.md](docs/customer-ready-v1-checklist.md)
+- [docs/device-diagnostics.md](docs/device-diagnostics.md)
+- [docs/qr-provisioning-architecture.md](docs/qr-provisioning-architecture.md)
+- [docs/profile-device-ownership.md](docs/profile-device-ownership.md)
 - [docs/live-test-preflight.md](docs/live-test-preflight.md)
 - [docs/safe-calibration.md](docs/safe-calibration.md)
+
+## QR Claim Flow
+
+The current customer-friendly claim path is now:
+
+1. Open a claim link or scan a QR code that points to `/claim?code=...`
+2. Sign in
+3. Redeem the device claim
+4. Continue to `/setup-device`
+5. If the device is offline, put it in setup mode and complete Wi-Fi setup on
+   the device's own setup network and captive portal
+6. Return to `/connect` once the device is online
+
+The QR or claim link must contain only the claim URL. It must never contain:
+
+- MQTT credentials
+- Wi-Fi credentials
+- internal admin secrets
+
+## Production Onboarding Flow
+
+The production onboarding order is now:
+
+1. Factory firmware reports a resolved device ID
+2. Admin registers the device in `/admin/devices`
+3. Admin creates a claim in `/admin/claims`
+4. Admin sends the claim link to the customer
+5. Customer signs in and claims the device in `/claim`
+6. Customer opens `/setup-device`
+7. If the device is offline, customer joins `SmartShutter-XXXXXX` and enters
+   home Wi-Fi in the device page
+8. Customer returns to `/connect` to finish setup
+
+Reference:
+
+- [docs/admin-device-onboarding.md](docs/admin-device-onboarding.md)
+- [docs/device-registration-handshake.md](docs/device-registration-handshake.md)
+- [docs/support-playbook.md](docs/support-playbook.md)
+
+## Factory Firmware Direction
+
+Factory firmware should eventually:
+
+- boot with a unique device identity
+- start a setup AP when no Wi-Fi credentials are saved
+- show a captive portal for local Wi-Fi onboarding
+- store Wi-Fi credentials locally on the device
+- connect to the cloud and publish status
+- accept OTA update commands after the device is online
+
+Reference:
+
+- [docs/factory-firmware-plan.md](docs/factory-firmware-plan.md)
 
 ## Mock Device Simulator
 
@@ -189,11 +379,17 @@ Current behavior:
 - the button is wired to `/firmware/manifest.json`
 - the manifest now points at a local/dev merged firmware artifact path
 - you must stage the merged `.bin` locally before `/flash` can install it
+- browser install currently stays focused on supported ESP32 builds
+- ESP8266 boards should use the manual Arduino IDE or CLI path
 - manual Arduino IDE and Arduino CLI flashing remain the supported install path
 - `/connect` stays the verification and testing destination after flashing
 
 First install and recovery should use USB flashing. OTA should remain for devices
 that are already online and already provisioned.
+
+USB is the factory and recovery path. The intended customer path is QR claim,
+local Wi-Fi setup through factory firmware, then OTA over Wi-Fi after the
+device is online.
 
 Do not enable OTA on the main attached-shutter device yet. Keep it disabled
 unless you are testing on a spare board with stable power and a recovery USB
@@ -221,9 +417,34 @@ This is temporary until browser flashing and richer provisioning exist. The curr
 
 Additional provisioning references:
 
+- [docs/device-claiming-roadmap.md](docs/device-claiming-roadmap.md)
 - [docs/device-registry.md](docs/device-registry.md)
+- [docs/factory-firmware-plan.md](docs/factory-firmware-plan.md)
+- [docs/profile-device-ownership.md](docs/profile-device-ownership.md)
 - [docs/browser-flashing-architecture.md](docs/browser-flashing-architecture.md)
+- [docs/qr-provisioning-architecture.md](docs/qr-provisioning-architecture.md)
 - [docs/web-flashing-plan.md](docs/web-flashing-plan.md)
+
+The current claim flow is now available at:
+
+- `/admin/claims` for internal claim-code creation
+- `/claim` for claim-code redemption
+- `/setup-device` for the customer Wi-Fi setup handoff after claiming
+
+In customer mode, claim redemption attaches the device to the signed-in customer
+profile. In internal test mode, the demo flow can still be used for simulator
+and local fallback work.
+
+## Profile And Devices
+
+Customer account pages:
+
+- `/profile` shows the signed-in account summary
+- `/devices` shows only the devices owned by that account
+- `/claim` lets a signed-in customer attach a new device by claim code
+
+The customer app now requires session ownership checks before showing devices,
+returning live status, or publishing commands.
 
 ## Firmware Console
 
@@ -350,6 +571,13 @@ powershell -ExecutionPolicy Bypass -File scripts/compile-firmware.ps1
 
 That helper writes firmware artifacts to `.arduino-build/firmware/esp32-shutter`.
 
+ESP8266 reference:
+
+- use `firmware/esp8266-shutter` for NodeMCU and similar ESP8266 boards
+- recommended CLI FQBN: `esp8266:esp8266:nodemcuv2`
+- browser install is not the primary path for ESP8266 yet
+- full guide: [docs/esp8266-firmware-build.md](docs/esp8266-firmware-build.md)
+
 To stage the merged firmware binary for local `/flash` testing:
 
 ```powershell
@@ -420,6 +648,56 @@ Our system currently generates or owns:
 
 Later, when the broker moves to AWS IoT Core, the registry can keep owning device identity while the broker-specific connection model changes from shared HiveMQ credentials to AWS IoT policies and per-device certificates.
 
+## Per-Device Credentials
+
+Today the platform still uses shared HiveMQ credentials for the MQTT broker.
+
+Current shared mode:
+
+- one shared MQTT username and password
+- per-device topics
+- derived per-device MQTT client ID
+- credential metadata tracked in the device record
+
+Planned per-device mode:
+
+- per-device cloud identity
+- per-device rotation and revocation
+- certificate-based AWS IoT Core path for production
+
+Reference:
+
+- [docs/per-device-credentials.md](docs/per-device-credentials.md)
+
+## Alexa Smart Home Roadmap
+
+Smart Shutter now includes a customer-owned Alexa Smart Home scaffold.
+
+Current scaffold:
+
+- route: `/api/integrations/alexa/smart-home`
+- discovery maps only owned devices
+- report state uses live device status
+- placeholder command mapping exists for:
+  - open
+  - close
+  - set position percent
+- customer profile shows a voice integrations placeholder
+
+Important:
+
+- MQTT credentials stay server-side
+- Alexa must not control unowned devices
+- safety mode and incomplete calibration must block unsafe movement
+- public account linking and certification are still future work
+
+References:
+
+- [docs/alexa-smart-home-architecture.md](docs/alexa-smart-home-architecture.md)
+- [docs/alexa-command-mapping.md](docs/alexa-command-mapping.md)
+- [docs/alexa-account-linking-plan.md](docs/alexa-account-linking-plan.md)
+- [docs/alexa-certification-checklist.md](docs/alexa-certification-checklist.md)
+
 ## Current Provisioning Limits
 
 Current limits:
@@ -452,6 +730,14 @@ This pass adds the database-backed release registry and safe firmware check APIs
 
 `/connect` is now the simplest user-facing version of that flow, while `/firmware`
 and `/setup` remain available as more detailed internal consoles.
+
+Once factory firmware exists, Wi-Fi setup should happen before this update flow:
+
+1. Claim the device
+2. Put the device into setup mode
+3. Connect it to Wi-Fi through its captive portal
+4. Let it come online
+5. Manage updates over Wi-Fi
 
 ## Future Roadmap
 
