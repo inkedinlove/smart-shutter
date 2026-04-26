@@ -9,6 +9,13 @@ firmware/esp8266-shutter
 Use this build when the device is a NodeMCU, ESP-12E, D1 mini, or another
 ESP8266-family board that cannot use the current browser flashing path.
 
+If the user only has the deployed Smart Shutter site and Arduino IDE, they can
+download the public sketch package from:
+
+```text
+/downloads/smart-shutter-esp8266-sketch.zip
+```
+
 ## What This Firmware Supports
 
 - the same Smart Shutter MQTT command topics as the ESP32 build

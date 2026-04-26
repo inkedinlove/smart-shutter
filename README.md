@@ -381,6 +381,7 @@ Current behavior:
 - you must stage the merged `.bin` locally before `/flash` can install it
 - browser install currently stays focused on supported ESP32 builds
 - ESP8266 boards should use the manual Arduino IDE or CLI path
+- `/flash` now also offers downloadable sketch ZIP packages for ESP8266 and ESP32 recovery installs
 - manual Arduino IDE and Arduino CLI flashing remain the supported install path
 - `/connect` stays the verification and testing destination after flashing
 

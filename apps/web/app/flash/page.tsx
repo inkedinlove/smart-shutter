@@ -39,6 +39,8 @@ const FLASH_STEPS = [
 
 const ESP8266_BOARD_MANAGER_URL =
   "http://arduino.esp8266.com/stable/package_esp8266com_index.json";
+const ESP8266_DOWNLOAD_PATH = "/downloads/smart-shutter-esp8266-sketch.zip";
+const ESP32_DOWNLOAD_PATH = "/downloads/smart-shutter-esp32-sketch.zip";
 
 const ESP8266_BOARD_PROFILES = [
   {
@@ -87,6 +89,27 @@ const ESP8266_COMPILE_COMMAND =
 
 const ESP8266_COMPILE_AND_UPLOAD_COMMAND =
   "arduino-cli compile --upload -p COM7 --fqbn esp8266:esp8266:nodemcuv2 .\\firmware\\esp8266-shutter";
+
+const MANUAL_DOWNLOADS = [
+  {
+    board: "esp8266",
+    title: "ESP8266 sketch package",
+    description:
+      "For NodeMCU, D1 mini, and other ESP8266-family boards that need Arduino IDE recovery.",
+    downloadPath: ESP8266_DOWNLOAD_PATH,
+    downloadLabel: "Download ESP8266 ZIP",
+    details: "Open `esp8266-shutter.ino` after unzipping the package.",
+  },
+  {
+    board: "esp32",
+    title: "ESP32 sketch package",
+    description:
+      "Manual Arduino IDE fallback for supported ESP32 boards when browser install is unavailable.",
+    downloadPath: ESP32_DOWNLOAD_PATH,
+    downloadLabel: "Download ESP32 ZIP",
+    details: "Open `esp32-shutter.ino` after unzipping the package.",
+  },
+] as const;
 
 export default function FlashPage() {
   const {
@@ -380,6 +403,69 @@ export default function FlashPage() {
             <p className="mt-3 text-sm leading-7 text-slate-400">
               Keep the manual flashing flow available for unsupported browsers or recovery.
             </p>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-[1rem] border border-white/10 bg-white/5 p-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <div className="text-xs uppercase tracking-[0.22em] text-cyan-200">
+                Download firmware packages
+              </div>
+              <h2 className="mt-2 text-2xl font-semibold text-white">
+                Site-only recovery download
+              </h2>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
+                If someone only has the deployed Smart Shutter site plus Arduino IDE,
+                they can download the matching sketch package here, unzip it, and
+                open the `.ino` file directly.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-2">
+            {MANUAL_DOWNLOADS.map((download) => {
+              const isSelectedBoard =
+                selectedDevice?.board?.trim().toLowerCase() === download.board;
+
+              return (
+                <div
+                  key={download.downloadPath}
+                  className={`rounded-[1rem] border p-5 ${
+                    isSelectedBoard
+                      ? "border-cyan-300/40 bg-cyan-400/10"
+                      : "border-white/10 bg-black/20"
+                  }`}
+                >
+                  <div className="text-xs uppercase tracking-[0.22em] text-slate-400">
+                    {download.board.toUpperCase()}
+                  </div>
+                  <div className="mt-2 text-xl font-semibold text-white">
+                    {download.title}
+                  </div>
+                  <p className="mt-3 text-sm leading-7 text-slate-300">
+                    {download.description}
+                  </p>
+                  <div className="mt-3 text-sm text-slate-400">
+                    {download.details}
+                  </div>
+                  {isSelectedBoard ? (
+                    <div className="mt-3 text-xs uppercase tracking-[0.18em] text-cyan-100">
+                      Recommended for the selected device
+                    </div>
+                  ) : null}
+                  <div className="mt-4">
+                    <a
+                      className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10"
+                      download
+                      href={download.downloadPath}
+                    >
+                      {download.downloadLabel}
+                    </a>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>
