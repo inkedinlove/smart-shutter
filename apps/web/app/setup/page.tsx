@@ -1,4 +1,5 @@
 import AppNav from "@/app/_components/app-nav";
+import ProvisioningManager from "@/app/setup/provisioning-manager";
 import CopyButton from "@/app/setup/copy-button";
 import {
   createProvisioningData,
@@ -61,10 +62,10 @@ export default async function SetupPage() {
               Step 2
             </div>
             <h2 className="mt-2 text-lg font-semibold text-white">
-              Copy firmware config
+              Generate ready package
             </h2>
             <p className="mt-3 text-sm leading-7 text-slate-400">
-              Copy the device settings below, then add the private MQTT username and password locally in `config.h`.
+              Download one admin-only package with the correct sketch and filled `config.h`.
             </p>
           </div>
 
@@ -73,10 +74,10 @@ export default async function SetupPage() {
               Step 3
             </div>
             <h2 className="mt-2 text-lg font-semibold text-white">
-              Flash with Arduino IDE
+              Send the board package
             </h2>
             <p className="mt-3 text-sm leading-7 text-slate-400">
-              Flash the firmware, then power the device and confirm it comes online.
+              Hand the installer the generated package, then have them open the `.ino` file and click Upload.
             </p>
           </div>
 
@@ -85,7 +86,7 @@ export default async function SetupPage() {
               Step 4
             </div>
             <h2 className="mt-2 text-lg font-semibold text-white">
-              Open dashboard and test
+              Return to setup and verify
             </h2>
             <p className="mt-3 text-sm leading-7 text-slate-400">
               Return to setup or the dashboard to confirm status and test movement safely.
@@ -93,6 +94,11 @@ export default async function SetupPage() {
           </div>
         </div>
       </section>
+
+      <ProvisioningManager
+        defaultDeviceId={defaultDeviceId}
+        devices={devices}
+      />
 
       <section className="dashboard-panel rounded-[1.2rem] border border-amber-300/20 bg-amber-300/8 p-6 sm:p-8">
           <div className="text-xs font-semibold uppercase tracking-[0.3em] text-amber-100">
@@ -105,8 +111,9 @@ export default async function SetupPage() {
             Keep secrets local
           </div>
           <p className="mt-3 max-w-4xl text-sm leading-7 text-amber-50/90">
-            MQTT username and password are not shown here. Add them only in your
-            local firmware file before flashing.
+            Ready-to-flash downloads from this page include live MQTT credentials.
+            Keep them internal, share them only with the installer, and avoid
+            posting the generated package publicly.
           </p>
       </section>
 
@@ -183,11 +190,12 @@ export default async function SetupPage() {
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <div className="text-xs uppercase tracking-[0.3em] text-slate-400">
-                      Firmware configuration preview
+                      Advanced firmware configuration preview
                     </div>
                     <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-400">
-                      Copy these settings into `firmware/esp32-shutter/config.h`,
-                      then add the private MQTT username and password locally.
+                      Keep this as the fallback copy-paste path. The provisioning
+                      manager above is now the easier way to generate a full
+                      ready-to-flash package for the selected board.
                     </p>
                   </div>
 
@@ -203,8 +211,8 @@ export default async function SetupPage() {
 
                 <div className="mt-4 text-xs leading-6 text-amber-100/90">
                   Final step:
-                  add `MQTT_USERNAME` and `MQTT_PASSWORD` in the local firmware
-                  file before flashing.
+                  use the provisioning manager above when you want the generated
+                  package to carry the real MQTT credentials for the installer.
                 </div>
               </div>
             </article>

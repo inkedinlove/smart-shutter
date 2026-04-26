@@ -413,6 +413,8 @@ It shows:
 - Registry-derived command and status topics
 - The current broker host and port
 - A firmware config preview with MQTT username and password redacted
+- An admin-only provisioning manager that generates a full ready-to-flash
+  package for the selected device and board, with a filled `config.h` inside
 
 This is temporary until browser flashing and richer provisioning exist. The current device provisioning roadmap is documented in [docs/provisioning-roadmap.md](docs/provisioning-roadmap.md).
 

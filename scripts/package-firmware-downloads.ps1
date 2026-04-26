@@ -4,6 +4,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $publicDownloadsDir = Join-Path $repoRoot "apps\web\public\downloads"
+$publicProvisioningAssetsDir = Join-Path $repoRoot "apps\web\public\provisioning-assets"
 $tempRoot = Join-Path $repoRoot ".tmp\firmware-download-packages"
 
 function Reset-Directory {
@@ -57,13 +58,17 @@ function New-FirmwarePackage {
 
   $packageRoot = Join-Path $tempRoot $ZipBaseName
   $packageSketchDir = Join-Path $packageRoot $SketchDirName
+  $publicAssetSketchDir = Join-Path $publicProvisioningAssetsDir $SketchDirName
 
   Reset-Directory -Path $packageRoot
   New-Item -ItemType Directory -Path $packageSketchDir | Out-Null
+  Reset-Directory -Path $publicAssetSketchDir
 
   Copy-Item -LiteralPath $sourceInoPath -Destination (Join-Path $packageSketchDir "$SketchDirName.ino")
   Copy-Item -LiteralPath $sourceConfigPath -Destination (Join-Path $packageSketchDir "config.example.h")
   Copy-Item -LiteralPath $sourceConfigPath -Destination (Join-Path $packageSketchDir "config.h")
+  Copy-Item -LiteralPath $sourceInoPath -Destination (Join-Path $publicAssetSketchDir "$SketchDirName.ino")
+  Copy-Item -LiteralPath $sourceConfigPath -Destination (Join-Path $publicAssetSketchDir "config.example.h")
 
   Write-Readme -Path (Join-Path $packageRoot "README.txt") -Lines $ReadmeLines
 
@@ -79,6 +84,7 @@ function New-FirmwarePackage {
 }
 
 Reset-Directory -Path $publicDownloadsDir
+Reset-Directory -Path $publicProvisioningAssetsDir
 Reset-Directory -Path $tempRoot
 
 $esp8266Zip = New-FirmwarePackage `

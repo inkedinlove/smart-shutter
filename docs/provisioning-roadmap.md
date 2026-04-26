@@ -15,6 +15,8 @@ This is the current firmware path and remains supported.
 - Device IDs and topics come from the web app device registry
 - Internal routes expose non-secret provisioning data
 - The `/setup` page shows a firmware config preview with secrets redacted
+- The admin-only provisioning manager can generate a full ready-to-flash
+  package, including a filled `config.h`, for a selected registered device and board
 
 This is the current web-side provisioning step.
 
