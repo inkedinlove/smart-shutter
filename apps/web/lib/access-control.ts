@@ -3,7 +3,7 @@ import "server-only";
 import type { Session } from "next-auth";
 
 import { getAuthSession } from "@/lib/auth";
-import { getRegisteredDeviceById } from "@/lib/device-registry";
+import { getRegisteredDeviceById, listAvailableDevices } from "@/lib/device-registry";
 import type { RegisteredDevice } from "@/lib/devices";
 import {
   getDemoProfile,
@@ -84,9 +84,12 @@ export async function listAccessibleDevices(): Promise<{
   devices: RegisteredDevice[];
 }> {
   const context = await getAccessContext();
-  const devices = await getDevicesForProfile(context.profile.profileId, {
-    allowFallback: context.mode === "internal",
-  });
+  const devices =
+    context.mode === "internal" || isAdminSession(context.session)
+      ? await listAvailableDevices()
+      : await getDevicesForProfile(context.profile.profileId, {
+          allowFallback: false,
+        });
 
   return {
     context,
@@ -99,6 +102,11 @@ export async function getDefaultAccessibleDeviceId(): Promise<string> {
 
   if (context.mode === "internal") {
     return getDemoProfileDefaultDeviceId({ allowFallback: true });
+  }
+
+  if (isAdminSession(context.session)) {
+    const devices = await listAvailableDevices();
+    return devices[0]?.deviceId ?? "";
   }
 
   const devices = await getDevicesForProfile(context.profile.profileId, {
@@ -127,6 +135,8 @@ export async function getAuthorizedDevice(
         (await getProfileDevice(context.profile.profileId, normalizedDeviceId, {
           allowFallback: true,
         }))
+      : isAdminSession(context.session)
+        ? await getRegisteredDeviceById(normalizedDeviceId)
       : await getProfileDevice(context.profile.profileId, normalizedDeviceId, {
           allowFallback: false,
         });
@@ -161,6 +171,20 @@ export async function getAuthorizedDeviceFromQuery(
     });
 
     return getAuthorizedDevice(fallbackDeviceId);
+  }
+
+  if (isAdminSession(context.session)) {
+    const devices = await listAvailableDevices();
+    const firstDevice = devices[0];
+
+    if (!firstDevice) {
+      throw new AccessControlError("No registered devices were found yet.", 404);
+    }
+
+    return {
+      context,
+      device: firstDevice,
+    };
   }
 
   const devices = await getDevicesForProfile(context.profile.profileId, {
