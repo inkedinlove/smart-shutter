@@ -123,6 +123,10 @@ function buildEsp8266Config(input: ProvisionedConfigInput): string {
     in2: 4,
     in3: 14,
     in4: 12,
+    motorMaxSpeed: 520.0,
+    motorAcceleration: 220.0,
+    safeMotorMaxSpeed: 180.0,
+    safeMotorAcceleration: 90.0,
   });
 }
 
@@ -135,6 +139,10 @@ function buildEsp8266D1D4Config(input: ProvisionedConfigInput): string {
     in2: 4,
     in3: 0,
     in4: 2,
+    motorMaxSpeed: 360.0,
+    motorAcceleration: 140.0,
+    safeMotorMaxSpeed: 140.0,
+    safeMotorAcceleration: 70.0,
   });
 }
 
@@ -147,6 +155,10 @@ function buildEsp8266StepperConfig(
     in2: number;
     in3: number;
     in4: number;
+    motorMaxSpeed: number;
+    motorAcceleration: number;
+    safeMotorMaxSpeed: number;
+    safeMotorAcceleration: number;
   },
 ): string {
   const wifiSsid = input.wifiMode === "preconfigured" ? input.wifiSsid : "";
@@ -211,13 +223,13 @@ constexpr int IN3 = ${pinout.in3};
 constexpr int IN4 = ${pinout.in4};
 
 constexpr long TRAVEL_STEPS = 2048;
-constexpr float MOTOR_MAX_SPEED = 520.0f;
-constexpr float MOTOR_ACCELERATION = 220.0f;
+constexpr float MOTOR_MAX_SPEED = ${pinout.motorMaxSpeed.toFixed(1)}f;
+constexpr float MOTOR_ACCELERATION = ${pinout.motorAcceleration.toFixed(1)}f;
 
 #define SAFE_ALLOWED_MAX_PERCENT_STEP 10
 #define SAFE_DEFAULT_NUDGE_PERCENT 2
-#define SAFE_MOTOR_MAX_SPEED 180.0f
-#define SAFE_MOTOR_ACCELERATION 90.0f
+#define SAFE_MOTOR_MAX_SPEED ${pinout.safeMotorMaxSpeed.toFixed(1)}f
+#define SAFE_MOTOR_ACCELERATION ${pinout.safeMotorAcceleration.toFixed(1)}f
 
 // ---------------------------------------------------------------------------
 // Retry and Status Timing

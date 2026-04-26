@@ -1,5 +1,6 @@
 import { AccessControlError, listAccessibleDevices } from "@/lib/access-control";
 import { apiError, apiOk } from "@/lib/api-response";
+import { getAlexaPublicSetupConfig } from "@/lib/integrations/alexa-oauth";
 import { getVoiceIntegrationsForProfile } from "@/lib/profiles";
 
 export const runtime = "nodejs";
@@ -17,6 +18,7 @@ export async function GET() {
         profile: context.profile,
         devices,
         voiceIntegrations,
+        alexaSetup: getAlexaPublicSetupConfig(),
       },
       {
         headers: {

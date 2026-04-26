@@ -1,6 +1,6 @@
 # Alexa Account Linking Plan
 
-This document describes the path from the current Alexa scaffold to real account-linked Smart Home control.
+This document describes the current first-pass Alexa account-linking implementation and the remaining work toward production launch.
 
 ## OAuth Requirement
 
@@ -26,14 +26,14 @@ Expected flow:
 
 ## Token Exchange
 
-The production skill will need:
+The current skill uses:
 
 - client ID
 - client secret
 - authorization endpoint
 - token endpoint
 
-Alexa will exchange credentials for an access token that Smart Shutter can map to a customer session or profile.
+Alexa exchanges credentials for a Smart Shutter-issued access token and refresh token pair. Smart Shutter maps those tokens to a customer profile and tracks the linked state in `VoiceIntegrationAccount`.
 
 ## Alexa Access Token To Smart Shutter Customer
 
@@ -87,18 +87,20 @@ Before a real Alexa launch, Smart Shutter still needs:
 - privacy/security review
 - certification validation for blinds/shades
 
-## Current Scaffold
+## Current Implementation
 
 This repo now has:
 
 - Alexa Smart Home architecture docs
 - directive mapping helper
-- placeholder Smart Home API route
+- live Smart Home API route
+- OAuth authorization route
+- OAuth token route
 - `VoiceIntegrationAccount` persistence model
-- `/profile` voice integration status
+- `/profile` voice integration status and setup values
 
 It does not yet have:
 
-- live OAuth account linking
-- public Alexa skill enablement
-- real MQTT publish from Alexa
+- certification review
+- account unlinking UI
+- proactive Alexa change reports

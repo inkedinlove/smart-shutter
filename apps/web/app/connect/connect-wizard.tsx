@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { startTransition, useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 
 import AppShell from "@/app/_components/app-shell";
 import {
@@ -615,6 +615,7 @@ export default function ConnectWizard() {
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const hasLoadedStatus = useRef(false);
   const searchParams = useSearchParams();
   const {
     deviceRegistryError,
@@ -626,6 +627,10 @@ export default function ConnectWizard() {
     setSelectedDeviceId,
   } = useDeviceRegistry();
   const requestedDeviceId = searchParams.get("deviceId")?.trim() || "";
+
+  useEffect(() => {
+    hasLoadedStatus.current = false;
+  }, [selectedDeviceId]);
 
   useEffect(() => {
     if (!requestedDeviceId || devices.length === 0) {
@@ -681,13 +686,19 @@ export default function ConnectWizard() {
   useEffect(() => {
     if (!selectedDeviceId) {
       setIsLoadingStatus(false);
+      hasLoadedStatus.current = false;
       return;
     }
 
     let isCancelled = false;
 
-    async function loadStatus() {
-      setIsLoadingStatus(true);
+    async function loadStatus(options?: { silent?: boolean }) {
+      const shouldShowLoading =
+        options?.silent !== true || !hasLoadedStatus.current;
+
+      if (shouldShowLoading) {
+        setIsLoadingStatus(true);
+      }
 
       try {
         const status = await fetchDeviceStatus(selectedDeviceId);
@@ -700,6 +711,8 @@ export default function ConnectWizard() {
           setDeviceStatus(status);
           setErrorMessage(null);
         });
+
+        hasLoadedStatus.current = true;
       } catch (error) {
         if (isCancelled) {
           return;
@@ -721,7 +734,7 @@ export default function ConnectWizard() {
           );
         });
       } finally {
-        if (!isCancelled) {
+        if (!isCancelled && shouldShowLoading) {
           setIsLoadingStatus(false);
         }
       }
@@ -730,7 +743,7 @@ export default function ConnectWizard() {
     void loadStatus();
 
     const intervalId = window.setInterval(() => {
-      void loadStatus();
+      void loadStatus({ silent: true });
     }, STATUS_POLL_MS);
 
     return () => {

@@ -1,6 +1,6 @@
 # Alexa Smart Home Architecture
 
-This document describes the planned Alexa integration shape for Smart Shutter.
+This document describes the current first-pass Alexa integration shape for Smart Shutter.
 
 ## Why Smart Home Skill
 
@@ -22,7 +22,7 @@ For Smart Shutter, that means:
 - Alexa receives customer-scoped cloud access
 - discovery returns only devices owned by that linked customer
 
-The current scaffold does not implement public Alexa account linking yet. For now, the route is a session-backed internal scaffold that preserves the same ownership rules.
+The current implementation now includes Alexa account linking through Smart Shutter-owned OAuth authorization and token routes. Linked customer profiles keep the same ownership rules already used by the web app. Admin-linked accounts can also discover registered devices for internal testing.
 
 ## Discovery From Owned Devices
 
@@ -88,17 +88,19 @@ Before Works with Alexa or production launch, Smart Shutter still needs:
 - production-ready error handling
 - certification review against window-treatment requirements
 
-## Current Scaffold
+## Current Implementation
 
 This repo now includes:
 
-- a placeholder Smart Home API route
+- a live Smart Home API route at `/api/integrations/alexa/smart-home`
+- OAuth account-linking routes at `/api/integrations/alexa/authorize` and `/api/integrations/alexa/token`
 - discovery mapping from owned devices
-- directive-to-command mapping helpers
-- customer-profile placeholder for voice integrations
+- live MQTT-backed command execution for supported directives
+- customer-profile Alexa status plus setup values on `/profile`
 
 It does not yet include:
 
-- real Alexa account linking
-- public skill registration
-- certification-ready control execution
+- public skill registration itself in the Alexa developer console
+- account unlinking UX
+- proactive state/change reporting
+- certification-ready launch polish

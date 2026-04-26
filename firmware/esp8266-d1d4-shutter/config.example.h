@@ -61,13 +61,13 @@ constexpr int IN3 = 0;
 constexpr int IN4 = 2;
 
 constexpr long TRAVEL_STEPS = 2048;
-constexpr float MOTOR_MAX_SPEED = 520.0f;
-constexpr float MOTOR_ACCELERATION = 220.0f;
+constexpr float MOTOR_MAX_SPEED = 360.0f;
+constexpr float MOTOR_ACCELERATION = 140.0f;
 
 #define SAFE_ALLOWED_MAX_PERCENT_STEP 10
 #define SAFE_DEFAULT_NUDGE_PERCENT 2
-#define SAFE_MOTOR_MAX_SPEED 180.0f
-#define SAFE_MOTOR_ACCELERATION 90.0f
+#define SAFE_MOTOR_MAX_SPEED 140.0f
+#define SAFE_MOTOR_ACCELERATION 70.0f
 
 // ---------------------------------------------------------------------------
 // Retry and Status Timing

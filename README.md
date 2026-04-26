@@ -100,6 +100,7 @@ ENABLE_EXPERIMENTAL_OTA_UI=false
 ALEXA_SKILL_ENABLED=false
 ALEXA_CLIENT_ID=
 ALEXA_CLIENT_SECRET=
+ALEXA_ALLOWED_REDIRECT_HOSTS=
 ```
 
 Where these come from:
@@ -114,8 +115,9 @@ Where these come from:
 - `PUBLIC_APP_BASE_URL` is the base app URL used when validating whether a firmware artifact URL is safe to expose in browser responses.
 - `ADMIN_TOKEN` protects internal firmware release publishing for the MVP.
 - `ENABLE_EXPERIMENTAL_OTA_UI` is a dev-only gate that keeps the Firmware Console's `Update Firmware` action disabled unless you explicitly turn it on.
-- `ALEXA_SKILL_ENABLED` enables the internal Alexa Smart Home scaffold route.
-- `ALEXA_CLIENT_ID` and `ALEXA_CLIENT_SECRET` are reserved for future Alexa account-linking setup.
+- `ALEXA_SKILL_ENABLED` enables the Alexa Smart Home endpoint plus account-linking routes.
+- `ALEXA_CLIENT_ID` and `ALEXA_CLIENT_SECRET` identify the Alexa skill during OAuth account linking.
+- `ALEXA_ALLOWED_REDIRECT_HOSTS` is an optional comma-separated allowlist for Alexa redirect hosts. Leave it blank to allow the standard HTTPS Alexa redirect URLs.
 - Device IDs, labels, command topics, status topics, and ownership come from the profile/device layer, backed by Prisma in customer mode and by explicit fallback only in internal test mode.
 - The `/setup` page and provisioning routes generate copy-ready non-secret device config from that registry.
 
@@ -676,23 +678,22 @@ Reference:
 
 Smart Shutter now includes a customer-owned Alexa Smart Home scaffold.
 
-Current scaffold:
+Current first-pass implementation:
 
-- route: `/api/integrations/alexa/smart-home`
-- discovery maps only owned devices
-- report state uses live device status
-- placeholder command mapping exists for:
-  - open
-  - close
-  - set position percent
-- customer profile shows a voice integrations placeholder
+- smart home route: `/api/integrations/alexa/smart-home`
+- OAuth authorization route: `/api/integrations/alexa/authorize`
+- OAuth token route: `/api/integrations/alexa/token`
+- discovery maps linked-account devices and also supports admin-linked testing
+- report state uses live MQTT device status
+- command execution publishes the same MQTT control payloads as the web app
+- customer profile shows Alexa link status plus the skill endpoint/account-linking values
 
 Important:
 
 - MQTT credentials stay server-side
 - Alexa must not control unowned devices
 - safety mode and incomplete calibration must block unsafe movement
-- public account linking and certification are still future work
+- certification review and proactive change reporting are still future work
 
 References:
 

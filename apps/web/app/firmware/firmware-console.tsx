@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useMemo, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 
 import AppShell from "@/app/_components/app-shell";
 import {
@@ -242,16 +242,24 @@ export default function FirmwareConsole({
   const [isLoadingManifest, setIsLoadingManifest] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const hasLoadedStatus = useRef(false);
 
   useEffect(() => {
     if (!selectedDeviceId) {
+      hasLoadedStatus.current = false;
       return;
     }
 
+    hasLoadedStatus.current = false;
     let isCancelled = false;
 
-    async function loadStatus() {
-      setIsLoadingStatus(true);
+    async function loadStatus(options?: { silent?: boolean }) {
+      const shouldShowLoading =
+        options?.silent !== true || !hasLoadedStatus.current;
+
+      if (shouldShowLoading) {
+        setIsLoadingStatus(true);
+      }
 
       try {
         const status = await fetchDeviceStatus(selectedDeviceId);
@@ -264,6 +272,8 @@ export default function FirmwareConsole({
           setDeviceStatus(status);
           setErrorMessage(null);
         });
+
+        hasLoadedStatus.current = true;
       } catch (error) {
         if (isCancelled) {
           return;
@@ -285,7 +295,7 @@ export default function FirmwareConsole({
           );
         });
       } finally {
-        if (!isCancelled) {
+        if (!isCancelled && shouldShowLoading) {
           setIsLoadingStatus(false);
         }
       }
@@ -294,7 +304,7 @@ export default function FirmwareConsole({
     void loadStatus();
 
     const intervalId = window.setInterval(() => {
-      void loadStatus();
+      void loadStatus({ silent: true });
     }, STATUS_POLL_MS);
 
     return () => {

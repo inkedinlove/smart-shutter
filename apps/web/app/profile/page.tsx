@@ -29,10 +29,21 @@ type VoiceIntegrationRecord = {
   revokedAt: string | null;
 };
 
+type AlexaSetupRecord = {
+  enabled: boolean;
+  baseUrl: string;
+  clientId: string;
+  authorizationUrl: string;
+  tokenUrl: string;
+  smartHomeUrl: string;
+  usesPkce: boolean;
+};
+
 type ProfileResponse = {
   profile: ProfileRecord;
   devices: RegisteredDevice[];
   voiceIntegrations: VoiceIntegrationRecord[];
+  alexaSetup: AlexaSetupRecord;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -52,7 +63,15 @@ function isDevicesResponse(value: unknown): value is ProfileResponse {
     isRecord(value) &&
     isProfileRecord(value.profile) &&
     Array.isArray(value.devices) &&
-    Array.isArray(value.voiceIntegrations)
+    Array.isArray(value.voiceIntegrations) &&
+    isRecord(value.alexaSetup) &&
+    typeof value.alexaSetup.enabled === "boolean" &&
+    typeof value.alexaSetup.baseUrl === "string" &&
+    typeof value.alexaSetup.clientId === "string" &&
+    typeof value.alexaSetup.authorizationUrl === "string" &&
+    typeof value.alexaSetup.tokenUrl === "string" &&
+    typeof value.alexaSetup.smartHomeUrl === "string" &&
+    typeof value.alexaSetup.usesPkce === "boolean"
   );
 }
 
@@ -84,6 +103,7 @@ export default function ProfilePage() {
   const [voiceIntegrations, setVoiceIntegrations] = useState<VoiceIntegrationRecord[]>(
     [],
   );
+  const [alexaSetup, setAlexaSetup] = useState<AlexaSetupRecord | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -113,6 +133,7 @@ export default function ProfilePage() {
           setProfile(payload.profile);
           setOwnedDeviceCount(payload.devices.length);
           setVoiceIntegrations(payload.voiceIntegrations);
+          setAlexaSetup(payload.alexaSetup);
           setErrorMessage(null);
         });
       } catch (error) {
@@ -165,6 +186,14 @@ export default function ProfilePage() {
           ? `Revoked ${formatJoinedDate(alexaIntegration.revokedAt)}`
           : "Previously connected, now revoked"
         : "Voice control will appear here once account linking is available.";
+  const alexaSetupReady = Boolean(
+    alexaSetup?.enabled &&
+      alexaSetup.baseUrl &&
+      alexaSetup.clientId &&
+      alexaSetup.authorizationUrl &&
+      alexaSetup.tokenUrl &&
+      alexaSetup.smartHomeUrl,
+  );
 
   return (
     <AppShell
@@ -265,7 +294,7 @@ export default function ProfilePage() {
           <div className="text-xs uppercase tracking-[0.22em] text-slate-400">
             Voice integrations
           </div>
-          <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="mt-3 space-y-4">
             <div>
               <div className="text-xl font-semibold text-white">Alexa</div>
               <div className="mt-2 text-sm leading-6 text-slate-300">
@@ -275,13 +304,76 @@ export default function ProfilePage() {
                 {alexaStatusDetail}
               </div>
             </div>
-            <button
-              type="button"
-              disabled
-              className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-slate-400 opacity-80"
-            >
-              Connect Alexa
-            </button>
+
+            {alexaSetup?.enabled ? (
+              <div className="rounded-xl border border-cyan-400/15 bg-cyan-400/8 p-4">
+                <div className="text-sm font-semibold text-cyan-50">
+                  Alexa developer console values
+                </div>
+                <div className="mt-2 text-sm leading-6 text-slate-300">
+                  Use these when configuring the Smart Home skill account-linking
+                  and endpoint URLs. After the skill is configured, enable it in the
+                  Alexa app and link the same Smart Shutter account you use here.
+                </div>
+
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
+                    <div className="text-[0.7rem] uppercase tracking-[0.2em] text-slate-500">
+                      Client ID
+                    </div>
+                    <div className="mt-2 wrap-anywhere text-sm text-white">
+                      {alexaSetup.clientId || "Set ALEXA_CLIENT_ID"}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
+                    <div className="text-[0.7rem] uppercase tracking-[0.2em] text-slate-500">
+                      PKCE
+                    </div>
+                    <div className="mt-2 text-sm text-white">
+                      {alexaSetup.usesPkce ? "Required" : "Not enabled"}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
+                    <div className="text-[0.7rem] uppercase tracking-[0.2em] text-slate-500">
+                      Authorization URI
+                    </div>
+                    <div className="mt-2 wrap-anywhere text-sm text-white">
+                      {alexaSetup.authorizationUrl || "Set PUBLIC_APP_BASE_URL"}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
+                    <div className="text-[0.7rem] uppercase tracking-[0.2em] text-slate-500">
+                      Token URI
+                    </div>
+                    <div className="mt-2 wrap-anywhere text-sm text-white">
+                      {alexaSetup.tokenUrl || "Set PUBLIC_APP_BASE_URL"}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3 lg:col-span-2">
+                    <div className="text-[0.7rem] uppercase tracking-[0.2em] text-slate-500">
+                      Smart Home Endpoint
+                    </div>
+                    <div className="mt-2 wrap-anywhere text-sm text-white">
+                      {alexaSetup.smartHomeUrl || "Set PUBLIC_APP_BASE_URL"}
+                    </div>
+                  </div>
+                </div>
+
+                {!alexaSetupReady ? (
+                  <div className="mt-3 text-sm text-amber-100">
+                    Finish the Alexa env setup first. `PUBLIC_APP_BASE_URL`,
+                    `ALEXA_CLIENT_ID`, and `ALEXA_CLIENT_SECRET` must all be set on
+                    the deployed app.
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-white/10 bg-slate-950/30 p-4 text-sm leading-6 text-slate-400">
+                Alexa support is currently disabled for this deployment. Set
+                `ALEXA_SKILL_ENABLED=true` to enable account linking and Smart Home
+                control.
+              </div>
+            )}
           </div>
         </div>
 

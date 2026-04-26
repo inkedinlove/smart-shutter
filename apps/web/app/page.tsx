@@ -142,22 +142,30 @@ export default function Home() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const hasSyncedInitialValue = useRef(false);
+  const hasLoadedStatus = useRef(false);
 
   useEffect(() => {
     if (!selectedDeviceId) {
       hasSyncedInitialValue.current = false;
+      hasLoadedStatus.current = false;
       setFeedback(null);
       setStatus(createDefaultDeviceStatus(""));
       return;
     }
 
     hasSyncedInitialValue.current = false;
+    hasLoadedStatus.current = false;
     setFeedback(null);
 
     let isCancelled = false;
 
-    async function loadStatus() {
-      setIsLoadingStatus(true);
+    async function loadStatus(options?: { silent?: boolean }) {
+      const shouldShowLoading =
+        options?.silent !== true || !hasLoadedStatus.current;
+
+      if (shouldShowLoading) {
+        setIsLoadingStatus(true);
+      }
 
       try {
         const response = await fetchWithShortTimeout(
@@ -183,6 +191,8 @@ export default function Home() {
           setStatus(nextStatus);
           setErrorMessage(null);
         });
+
+        hasLoadedStatus.current = true;
 
         if (!hasSyncedInitialValue.current) {
           const initialValue = nextStatus.targetPercent ?? nextStatus.estimatedPercent;
@@ -212,7 +222,7 @@ export default function Home() {
           );
         });
       } finally {
-        if (!isCancelled) {
+        if (!isCancelled && shouldShowLoading) {
           setIsLoadingStatus(false);
         }
       }
@@ -221,7 +231,7 @@ export default function Home() {
     void loadStatus();
 
     const intervalId = window.setInterval(() => {
-      void loadStatus();
+      void loadStatus({ silent: true });
     }, STATUS_POLL_MS);
 
     return () => {

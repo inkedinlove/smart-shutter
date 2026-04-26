@@ -20,6 +20,10 @@ export type AlexaDirectiveHeader = {
 
 export type AlexaDirectiveEndpoint = {
   endpointId: string;
+  scope?: {
+    type?: string;
+    token?: string;
+  };
 };
 
 export type AlexaDirective = {
@@ -66,6 +70,9 @@ export type AlexaErrorReason =
   | "CALIBRATION_REQUIRED"
   | "SAFETY_LOCKED"
   | "INVALID_VALUE"
+  | "INVALID_AUTHORIZATION_CREDENTIAL"
+  | "EXPIRED_AUTHORIZATION_CREDENTIAL"
+  | "INTERNAL_ERROR"
   | "UNSUPPORTED_DIRECTIVE"
   | "SKILL_DISABLED";
 
@@ -276,6 +283,32 @@ export function mapAlexaDirectiveToDeviceCommand(
   return null;
 }
 
+export function getAlexaAccessTokenFromDirective(
+  directive: AlexaDirective,
+): string {
+  const payloadScope = directive.payload?.scope;
+
+  if (
+    isRecord(payloadScope) &&
+    typeof payloadScope.token === "string" &&
+    payloadScope.token.trim().length > 0
+  ) {
+    return payloadScope.token.trim();
+  }
+
+  const endpointScope = directive.endpoint?.scope;
+
+  if (
+    isRecord(endpointScope) &&
+    typeof endpointScope.token === "string" &&
+    endpointScope.token.trim().length > 0
+  ) {
+    return endpointScope.token.trim();
+  }
+
+  return "";
+}
+
 function buildAlexaHeader(
   directive: AlexaDirective | undefined,
   name: string,
@@ -318,6 +351,18 @@ export function buildAlexaErrorResponse(
     INVALID_VALUE: {
       type: "VALUE_OUT_OF_RANGE",
       message: "The requested shutter position is invalid.",
+    },
+    INVALID_AUTHORIZATION_CREDENTIAL: {
+      type: "INVALID_AUTHORIZATION_CREDENTIAL",
+      message: "The Alexa authorization token is invalid. Re-link the skill and try again.",
+    },
+    EXPIRED_AUTHORIZATION_CREDENTIAL: {
+      type: "EXPIRED_AUTHORIZATION_CREDENTIAL",
+      message: "The Alexa authorization token expired. Re-link the skill and try again.",
+    },
+    INTERNAL_ERROR: {
+      type: "INTERNAL_ERROR",
+      message: "Smart Shutter could not complete the Alexa request right now.",
     },
     UNSUPPORTED_DIRECTIVE: {
       type: "INVALID_DIRECTIVE",
