@@ -408,6 +408,13 @@ export default function AdminDevicesPage() {
             friendly label for the cloud registry.
           </p>
 
+          <div className="mt-4 rounded-[1rem] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300">
+            Re-entering an existing device ID updates its label and board type.
+            Use that to switch a device between <span className="font-semibold text-white">ESP8266</span>
+            {" "}and <span className="font-semibold text-white">ESP8266 Servo</span>
+            {" "}if the first registration used the wrong firmware family.
+          </div>
+
           <div className="mt-5 rounded-[1rem] border border-cyan-400/15 bg-cyan-400/8 p-4 text-sm leading-7 text-cyan-100">
             Factory device IDs usually look like{" "}
             <span className="font-mono text-cyan-50">shutter-xxxxxx</span>.

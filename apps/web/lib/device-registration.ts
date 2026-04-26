@@ -285,7 +285,43 @@ export async function registerDeviceIfMissing(input: {
   });
 
   if (existingDevice) {
-    return mapDatabaseRegistrationState(existingDevice);
+    const existingBoard = normalizeDeviceBoard(existingDevice.board);
+    const nextTopics = buildDefaultDeviceTopics(deviceId);
+    const needsUpdate =
+      existingDevice.label !== label ||
+      existingBoard !== board ||
+      !existingDevice.mqttCommandTopic ||
+      !existingDevice.mqttStatusTopic ||
+      !existingDevice.mqttClientId;
+
+    if (!needsUpdate) {
+      return mapDatabaseRegistrationState(existingDevice);
+    }
+
+    const updatedDevice = await db.device.update({
+      where: {
+        deviceId,
+      },
+      data: {
+        label,
+        board,
+        mqttCommandTopic: existingDevice.mqttCommandTopic || nextTopics.commandTopic,
+        mqttStatusTopic: existingDevice.mqttStatusTopic || nextTopics.statusTopic,
+        mqttClientId:
+          existingDevice.mqttClientId ?? buildDeviceMqttClientId(deviceId),
+      } as never,
+      include: {
+        ownerProfile: {
+          select: {
+            id: true,
+            displayName: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    return mapDatabaseRegistrationState(updatedDevice);
   }
 
   const topics = buildDefaultDeviceTopics(deviceId);
