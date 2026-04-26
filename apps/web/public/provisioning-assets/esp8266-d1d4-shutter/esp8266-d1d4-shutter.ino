@@ -10,14 +10,14 @@
 #if __has_include("config.h")
 #include "config.h"
 #else
-#error "Missing config.h. Copy firmware/esp8266-shutter/config.example.h to firmware/esp8266-shutter/config.h and fill in your WiFi and MQTT settings before compiling."
+#error "Missing config.h. Copy firmware/esp8266-d1d4-shutter/config.example.h to firmware/esp8266-d1d4-shutter/config.h and fill in your WiFi and MQTT settings before compiling."
 #endif
 #else
-#error "Compiler does not support __has_include. Create firmware/esp8266-shutter/config.h from config.example.h before compiling."
+#error "Compiler does not support __has_include. Create firmware/esp8266-d1d4-shutter/config.h from config.example.h before compiling."
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.1.0-dev-esp8266"
+#define FIRMWARE_VERSION "0.1.0-dev-esp8266-d1d4"
 #endif
 
 #ifndef ENABLE_OTA_UPDATES
@@ -426,7 +426,7 @@ size_t buildStatusPayload(
   statusDoc["deviceMode"] = deviceModeToString(modeValue);
   statusDoc["estimatedPercent"] = stepsToPercent(stepper.currentPosition());
   statusDoc["targetPercent"] = targetPercent;
-  statusDoc["reportedBoard"] = "esp8266";
+  statusDoc["reportedBoard"] = "esp8266-d1d4";
   statusDoc["actuatorType"] = "stepper";
   JsonArray reportedCapabilities =
     statusDoc.createNestedArray("reportedCapabilities");
@@ -1098,7 +1098,7 @@ void setup() {
 
   bootStartedMs = millis();
 
-  Serial.println("Smart Shutter ESP8266 booting...");
+  Serial.println("Smart Shutter ESP8266 D1-D4 Stepper booting...");
   setDeviceMode(DEVICE_MODE_BOOTING);
 
   resolvedDeviceId = resolveDeviceId();

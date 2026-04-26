@@ -1,3 +1,10 @@
+import {
+  DEVICE_BOARD_VALUES,
+  formatDeviceBoardLabel,
+  normalizeDeviceBoardValue,
+  type DeviceBoard,
+} from "@/lib/devices";
+
 export const DEVICE_MODE_VALUES = [
   "BOOTING",
   "WIFI_CONNECTING",
@@ -31,6 +38,8 @@ export const DEVICE_CLAIM_STATE_VALUES = [
 ] as const;
 
 export type DeviceClaimState = (typeof DEVICE_CLAIM_STATE_VALUES)[number];
+export const DEVICE_ACTUATOR_TYPE_VALUES = ["stepper", "servo"] as const;
+export type DeviceActuatorType = (typeof DEVICE_ACTUATOR_TYPE_VALUES)[number];
 
 export const DEFAULT_NUDGE_AMOUNT = 2;
 export const MAX_NUDGE_AMOUNT = 10;
@@ -134,11 +143,19 @@ export type DeviceStatus = {
   allowedMaxPercentStep?: number;
   lastCalibrationAction?: string;
   movementLockedReason?: string;
+  reportedBoard?: DeviceBoard;
+  actuatorType?: DeviceActuatorType;
+  reportedCapabilities?: string[];
 };
 
 export type DeviceDiagnostics = {
   deviceId: string;
   claimState: DeviceClaimState;
+  registeredBoard: DeviceBoard | null;
+  reportedBoard: DeviceBoard | null;
+  actuatorType: DeviceActuatorType | null;
+  reportedCapabilities: string[];
+  compatibilityWarning: string | null;
   online: boolean;
   lastSeenAt: string | null;
   firmwareVersion: string | null;
@@ -170,12 +187,119 @@ export function isDeviceClaimState(value: unknown): value is DeviceClaimState {
   );
 }
 
+export function isDeviceActuatorType(value: unknown): value is DeviceActuatorType {
+  return (
+    typeof value === "string" &&
+    DEVICE_ACTUATOR_TYPE_VALUES.includes(value as DeviceActuatorType)
+  );
+}
+
+export function normalizeReportedBoardValue(
+  value: unknown,
+): DeviceBoard | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalizedValue = value.trim().toLowerCase();
+
+  if (!DEVICE_BOARD_VALUES.includes(normalizedValue as DeviceBoard)) {
+    return undefined;
+  }
+
+  return normalizedValue as DeviceBoard;
+}
+
+export function getExpectedActuatorTypeForBoard(
+  board: string | null | undefined,
+): DeviceActuatorType | null {
+  if (!board || board.trim().length === 0) {
+    return null;
+  }
+
+  return normalizeDeviceBoardValue(board) === "esp8266-servo"
+    ? "servo"
+    : "stepper";
+}
+
+export function formatDeviceActuatorType(
+  value: DeviceActuatorType | null | undefined,
+): string {
+  if (!value) {
+    return "Unknown";
+  }
+
+  return value === "servo" ? "Servo" : "Stepper";
+}
+
+export function formatReportedCapabilities(
+  capabilities: string[] | null | undefined,
+): string {
+  if (!capabilities || capabilities.length === 0) {
+    return "Unknown";
+  }
+
+  return capabilities
+    .map((capability) =>
+      capability
+        .trim()
+        .toLowerCase()
+        .split(/[_-\s]+/)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" "),
+    )
+    .join(", ");
+}
+
+export function getDeviceCompatibilityWarning(
+  registeredBoard: string | null | undefined,
+  status: Pick<DeviceStatus, "reportedBoard" | "actuatorType"> | null | undefined,
+): string | null {
+  if (!registeredBoard || registeredBoard.trim().length === 0 || !status) {
+    return null;
+  }
+
+  const normalizedRegisteredBoard = normalizeDeviceBoardValue(registeredBoard);
+  const expectedBoardLabel = formatDeviceBoardLabel(normalizedRegisteredBoard);
+  const reportedBoard = status.reportedBoard;
+
+  if (reportedBoard && reportedBoard !== normalizedRegisteredBoard) {
+    return `Registered as ${expectedBoardLabel}, but firmware reports ${formatDeviceBoardLabel(
+      reportedBoard,
+    )}. Flash the matching package before testing movement.`;
+  }
+
+  const expectedActuatorType =
+    getExpectedActuatorTypeForBoard(normalizedRegisteredBoard);
+  const reportedActuatorType = status.actuatorType ?? null;
+
+  if (
+    expectedActuatorType &&
+    reportedActuatorType &&
+    expectedActuatorType !== reportedActuatorType
+  ) {
+    return `Registered as ${expectedBoardLabel}, but firmware reports a ${formatDeviceActuatorType(
+      reportedActuatorType,
+    ).toLowerCase()} actuator. Flash the matching package before testing movement.`;
+  }
+
+  return null;
+}
+
 export function createDefaultDeviceStatus(
   deviceId: string,
   overrides?: Partial<
     Pick<
       DeviceStatus,
-      "resolvedDeviceId" | "claimState" | "setupMode" | "wifiConnected" | "mqttConnected"
+      | "resolvedDeviceId"
+      | "claimState"
+      | "setupMode"
+      | "wifiConnected"
+      | "mqttConnected"
+      | "reportedBoard"
+      | "actuatorType"
+      | "reportedCapabilities"
     >
   >,
 ): DeviceStatus {
@@ -204,17 +328,31 @@ export function createDefaultDeviceStatus(
     allowedMaxPercentStep: undefined,
     lastCalibrationAction: undefined,
     movementLockedReason: undefined,
+    reportedBoard: overrides?.reportedBoard,
+    actuatorType: overrides?.actuatorType,
+    reportedCapabilities: overrides?.reportedCapabilities,
   };
 }
 
 export function createDeviceDiagnostics(
+  registeredBoard: DeviceBoard | null,
   deviceId: string,
   claimState: DeviceClaimState,
   status: DeviceStatus | null,
 ): DeviceDiagnostics {
+  const compatibilityWarning = getDeviceCompatibilityWarning(
+    registeredBoard,
+    status,
+  );
+
   return {
     deviceId,
     claimState,
+    registeredBoard,
+    reportedBoard: status?.reportedBoard ?? null,
+    actuatorType: status?.actuatorType ?? null,
+    reportedCapabilities: status?.reportedCapabilities ?? [],
+    compatibilityWarning,
     online: status?.online ?? false,
     lastSeenAt: status?.lastSeenAt ?? null,
     firmwareVersion: status?.firmwareVersion ?? null,

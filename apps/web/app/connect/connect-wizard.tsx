@@ -16,11 +16,14 @@ import {
   DEFAULT_SAFE_ALLOWED_MAX_PERCENT_STEP,
   createDeviceDiagnostics,
   type DeviceDiagnostics,
+  formatDeviceActuatorType,
+  formatReportedCapabilities,
   type DeviceClaimState,
   type DeviceCommand,
   type DeviceStatus,
   type OtaState,
 } from "@/lib/device";
+import { formatDeviceBoardLabel, type DeviceBoard } from "@/lib/devices";
 import type { FirmwareCheckResponse } from "@/lib/firmware";
 import { useDeviceRegistry } from "@/lib/use-device-registry";
 
@@ -139,6 +142,7 @@ function isFirmwareCheckResponse(value: unknown): value is FirmwareCheckResponse
 type DeviceRegistrationState = {
   deviceId: string;
   label: string | null;
+  board: DeviceBoard | null;
   claimState: DeviceClaimState;
   ownerProfileId: string | null;
   ownerProfileDisplayName: string | null;
@@ -150,6 +154,7 @@ function isDeviceRegistrationState(value: unknown): value is DeviceRegistrationS
   return (
     isRecord(value) &&
     typeof value.deviceId === "string" &&
+    typeof value.board === "string" &&
     typeof value.claimState === "string" &&
     typeof value.ownedByCurrentProfile === "boolean"
   );
@@ -865,6 +870,7 @@ export default function ConnectWizard() {
             deviceId:
               selectedDeviceStatus.resolvedDeviceId || selectedDeviceStatus.deviceId,
             label: selectedDevice?.label ?? null,
+            board: selectedDevice?.board ?? registrationState?.board ?? null,
             claimState: selectedDeviceStatus.claimState,
             ownerProfileId: null,
             ownerProfileDisplayName: null,
@@ -878,6 +884,7 @@ export default function ConnectWizard() {
     requestedDeviceMissing
       ? registrationSummary?.label ?? "Requested device"
       : selectedDevice?.label ?? "Loading device";
+  const registeredBoard = registrationSummary?.board ?? selectedDevice?.board ?? null;
   const claimStateLabel = getClaimStateLabel(registrationSummary?.claimState);
   const activeErrorMessage =
     requestedDeviceMissing && registrationSummary?.claimState === "unknown"
@@ -924,11 +931,13 @@ export default function ConnectWizard() {
     }
 
     return createDeviceDiagnostics(
+      registeredBoard,
       selectedDeviceId,
       registrationSummary?.claimState ?? selectedDeviceStatus?.claimState ?? "unknown",
       selectedDeviceStatus,
     );
-  }, [registrationSummary?.claimState, selectedDeviceId, selectedDeviceStatus]);
+  }, [registeredBoard, registrationSummary?.claimState, selectedDeviceId, selectedDeviceStatus]);
+  const compatibilityWarning = diagnosticsSnapshot?.compatibilityWarning ?? null;
 
   const firmwareStatusMessage = useMemo(() => {
     if (!checkResult || checkResult.deviceId !== selectedDeviceId) {
@@ -1220,6 +1229,21 @@ export default function ConnectWizard() {
               {isDiagnosticsOpen ? (
                 <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                   <SummaryCard
+                    label="Registered board"
+                    meta="Cloud registry"
+                    value={formatDeviceBoardLabel(diagnosticsSnapshot?.registeredBoard)}
+                  />
+                  <SummaryCard
+                    label="Reported board"
+                    meta="Reported by firmware"
+                    value={formatDeviceBoardLabel(diagnosticsSnapshot?.reportedBoard)}
+                  />
+                  <SummaryCard
+                    label="Actuator"
+                    meta="Reported by firmware"
+                    value={formatDeviceActuatorType(diagnosticsSnapshot?.actuatorType)}
+                  />
+                  <SummaryCard
                     label="Connection"
                     meta={
                       diagnosticsSnapshot?.online
@@ -1275,8 +1299,24 @@ export default function ConnectWizard() {
                     })}
                     value={formatCalibrationState(selectedDeviceStatus)}
                   />
+                  <SummaryCard
+                    label="Capabilities"
+                    meta="Reported by firmware"
+                    value={formatReportedCapabilities(
+                      diagnosticsSnapshot?.reportedCapabilities,
+                    )}
+                  />
                 </div>
               ) : null}
+            </div>
+          ) : null}
+
+          {compatibilityWarning ? (
+            <div className="mt-6 rounded-[1rem] border border-amber-300/20 bg-amber-300/10 p-5 text-amber-50">
+              <div className="text-xs uppercase tracking-[0.24em] text-amber-100/80">
+                Compatibility warning
+              </div>
+              <p className="mt-2 text-sm leading-7">{compatibilityWarning}</p>
             </div>
           ) : null}
 

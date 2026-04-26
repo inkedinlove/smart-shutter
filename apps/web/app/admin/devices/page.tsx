@@ -424,7 +424,7 @@ export default function AdminDevicesPage() {
 
           <div className="mt-4 rounded-[1rem] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300">
             ESP32 devices can use the browser install path when supported. ESP8266
-            stepper and ESP8266 Servo devices should use the Arduino IDE or
+            stepper, ESP8266 D1-D4 Stepper, and ESP8266 Servo devices should use the Arduino IDE or
             Arduino CLI manual flashing flow for now.
           </div>
 
@@ -466,6 +466,7 @@ export default function AdminDevicesPage() {
               >
                 <option value="esp32">ESP32</option>
                 <option value="esp8266">ESP8266</option>
+                <option value="esp8266-d1d4">ESP8266 D1-D4 Stepper</option>
                 <option value="esp8266-servo">ESP8266 Servo</option>
               </select>
             </label>

@@ -27,6 +27,7 @@ export type ProvisioningDownloadInfo = {
 
 const DEFAULT_ESP32_FIRMWARE_VERSION = "0.1.0-dev";
 const DEFAULT_ESP8266_FIRMWARE_VERSION = "0.1.0-dev-esp8266";
+const DEFAULT_ESP8266_D1D4_FIRMWARE_VERSION = "0.1.0-dev-esp8266-d1d4";
 const DEFAULT_ESP8266_SERVO_FIRMWARE_VERSION = "0.1.0-dev-esp8266-servo";
 
 function toCString(value: string): string {
@@ -40,6 +41,16 @@ function buildMqttClientId(deviceId: string): string {
 export function getProvisioningDownloadInfo(
   board: DeviceBoard,
 ): ProvisioningDownloadInfo {
+  if (board === "esp8266-d1d4") {
+    return {
+      boardLabel: "ESP8266 D1-D4 Stepper",
+      downloadPath: "/downloads/smart-shutter-esp8266-d1d4-sketch.zip",
+      ideBoard: "NodeMCU 1.0 (ESP-12E Module)",
+      mainSketchFile: "esp8266-d1d4-shutter.ino",
+      sketchDirName: "esp8266-d1d4-shutter",
+    };
+  }
+
   if (board === "esp8266-servo") {
     return {
       boardLabel: "ESP8266 Servo",
@@ -104,6 +115,40 @@ export function normalizeProvisioningWifiInput(input: {
 }
 
 function buildEsp8266Config(input: ProvisionedConfigInput): string {
+  return buildEsp8266StepperConfig(input, {
+    firmwareVersion: DEFAULT_ESP8266_FIRMWARE_VERSION,
+    pinComment:
+      "// Default pin map for NodeMCU-style ESP8266 boards:\n// D1=GPIO5, D2=GPIO4, D5=GPIO14, D6=GPIO12",
+    in1: 5,
+    in2: 4,
+    in3: 14,
+    in4: 12,
+  });
+}
+
+function buildEsp8266D1D4Config(input: ProvisionedConfigInput): string {
+  return buildEsp8266StepperConfig(input, {
+    firmwareVersion: DEFAULT_ESP8266_D1D4_FIRMWARE_VERSION,
+    pinComment:
+      "// Known-good D1/D2/D3/D4 stepper wiring from the working board sketch:\n// D1=GPIO5, D2=GPIO4, D3=GPIO0, D4=GPIO2",
+    in1: 5,
+    in2: 4,
+    in3: 0,
+    in4: 2,
+  });
+}
+
+function buildEsp8266StepperConfig(
+  input: ProvisionedConfigInput,
+  pinout: {
+    firmwareVersion: string;
+    pinComment: string;
+    in1: number;
+    in2: number;
+    in3: number;
+    in4: number;
+  },
+): string {
   const wifiSsid = input.wifiMode === "preconfigured" ? input.wifiSsid : "";
   const wifiPassword =
     input.wifiMode === "preconfigured" ? input.wifiPassword : "";
@@ -126,7 +171,7 @@ constexpr const char* MQTT_CLIENT_ID = ${toCString(buildMqttClientId(input.devic
 
 // Device identity and topics provisioned from Smart Shutter.
 constexpr const char* DEVICE_ID = ${toCString(input.deviceId)};
-#define FIRMWARE_VERSION "${DEFAULT_ESP8266_FIRMWARE_VERSION}"
+#define FIRMWARE_VERSION "${pinout.firmwareVersion}"
 constexpr const char* COMMAND_TOPIC = ${toCString(input.commandTopic)};
 constexpr const char* STATUS_TOPIC = ${toCString(input.statusTopic)};
 
@@ -159,12 +204,11 @@ constexpr const char* STATUS_TOPIC = ${toCString(input.statusTopic)};
 // Motor Wiring and Motion Tuning
 // ---------------------------------------------------------------------------
 
-// Default pin map for NodeMCU-style ESP8266 boards:
-// D1=GPIO5, D2=GPIO4, D5=GPIO14, D6=GPIO12
-constexpr int IN1 = 5;
-constexpr int IN2 = 4;
-constexpr int IN3 = 14;
-constexpr int IN4 = 12;
+${pinout.pinComment}
+constexpr int IN1 = ${pinout.in1};
+constexpr int IN2 = ${pinout.in2};
+constexpr int IN3 = ${pinout.in3};
+constexpr int IN4 = ${pinout.in4};
 
 constexpr long TRAVEL_STEPS = 2048;
 constexpr float MOTOR_MAX_SPEED = 520.0f;
@@ -359,6 +403,10 @@ export function buildProvisionedConfig(
 ): string {
   if (input.board === "esp8266-servo") {
     return buildEsp8266ServoConfig(input);
+  }
+
+  if (input.board === "esp8266-d1d4") {
+    return buildEsp8266D1D4Config(input);
   }
 
   if (input.board === "esp8266") {

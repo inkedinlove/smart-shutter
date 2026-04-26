@@ -4,6 +4,7 @@ export type BrokerProfile = "hivemq-dev";
 export const DEVICE_BOARD_VALUES = [
   "esp32",
   "esp8266",
+  "esp8266-d1d4",
   "esp8266-servo",
 ] as const;
 export type DeviceBoard = (typeof DEVICE_BOARD_VALUES)[number];
@@ -41,6 +42,10 @@ export function formatDeviceBoardLabel(
   }
 
   const normalizedBoard = normalizeDeviceBoardValue(board);
+
+  if (normalizedBoard === "esp8266-d1d4") {
+    return "ESP8266 D1-D4 Stepper";
+  }
 
   if (normalizedBoard === "esp8266-servo") {
     return "ESP8266 Servo";

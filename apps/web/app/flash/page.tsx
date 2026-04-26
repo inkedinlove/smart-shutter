@@ -45,12 +45,14 @@ const FLASH_STEPS = [
 const ESP8266_BOARD_MANAGER_URL =
   "http://arduino.esp8266.com/stable/package_esp8266com_index.json";
 const ESP8266_STEPPER_DOWNLOAD_PATH = "/downloads/smart-shutter-esp8266-sketch.zip";
+const ESP8266_D1D4_DOWNLOAD_PATH =
+  "/downloads/smart-shutter-esp8266-d1d4-sketch.zip";
 const ESP8266_SERVO_DOWNLOAD_PATH =
   "/downloads/smart-shutter-esp8266-servo-sketch.zip";
 const ESP32_DOWNLOAD_PATH = "/downloads/smart-shutter-esp32-sketch.zip";
 
 type Esp8266Guide = {
-  board: Extract<DeviceBoard, "esp8266" | "esp8266-servo">;
+  board: Extract<DeviceBoard, "esp8266" | "esp8266-d1d4" | "esp8266-servo">;
   boardLabel: string;
   title: string;
   description: string;
@@ -98,7 +100,7 @@ const ESP8266_UPLOAD_REMINDERS = [
 ] as const;
 
 const ESP8266_MANUAL_GUIDES: Record<
-  Extract<DeviceBoard, "esp8266" | "esp8266-servo">,
+  Extract<DeviceBoard, "esp8266" | "esp8266-d1d4" | "esp8266-servo">,
   Esp8266Guide
 > = {
   esp8266: {
@@ -117,6 +119,24 @@ const ESP8266_MANUAL_GUIDES: Record<
     compileAndUploadCommand:
       "arduino-cli compile --upload -p COM7 --fqbn esp8266:esp8266:nodemcuv2 .\\firmware\\esp8266-shutter",
     bootLogLine: "Smart Shutter ESP8266 booting...",
+  },
+  "esp8266-d1d4": {
+    board: "esp8266-d1d4",
+    boardLabel: "ESP8266 D1-D4 Stepper",
+    title: "ESP8266 D1-D4 stepper package",
+    description:
+      "For the ESP8266 stepper board that already works with D1/D2/D3/D4 28BYJ-48 sketches and needs the Smart Shutter MQTT contract.",
+    sketchDir: "firmware\\esp8266-d1d4-shutter",
+    mainSketchFile: "esp8266-d1d4-shutter.ino",
+    downloadPath: ESP8266_D1D4_DOWNLOAD_PATH,
+    downloadLabel: "Download ESP8266 D1-D4 ZIP",
+    details:
+      "Open `esp8266-d1d4-shutter.ino` after unzipping the package.",
+    compileCommand:
+      "powershell -ExecutionPolicy Bypass -File .\\scripts\\compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2 -SketchDir .\\firmware\\esp8266-d1d4-shutter -OutputDir .\\.arduino-build\\firmware\\esp8266-d1d4-shutter",
+    compileAndUploadCommand:
+      "arduino-cli compile --upload -p COM7 --fqbn esp8266:esp8266:nodemcuv2 .\\firmware\\esp8266-d1d4-shutter",
+    bootLogLine: "Smart Shutter ESP8266 D1-D4 Stepper booting...",
   },
   "esp8266-servo": {
     board: "esp8266-servo",
@@ -141,6 +161,10 @@ const ESP8266_MANUAL_GUIDES: Record<
 function getEsp8266Guide(
   board: string | null | undefined,
 ): Esp8266Guide {
+  if (board?.trim().toLowerCase() === "esp8266-d1d4") {
+    return ESP8266_MANUAL_GUIDES["esp8266-d1d4"];
+  }
+
   if (board?.trim().toLowerCase() === "esp8266-servo") {
     return ESP8266_MANUAL_GUIDES["esp8266-servo"];
   }
@@ -167,6 +191,14 @@ const MANUAL_DOWNLOADS = [
     downloadPath: ESP8266_MANUAL_GUIDES.esp8266.downloadPath,
     downloadLabel: ESP8266_MANUAL_GUIDES.esp8266.downloadLabel,
     details: ESP8266_MANUAL_GUIDES.esp8266.details,
+  },
+  {
+    board: "esp8266-d1d4",
+    title: ESP8266_MANUAL_GUIDES["esp8266-d1d4"].title,
+    description: ESP8266_MANUAL_GUIDES["esp8266-d1d4"].description,
+    downloadPath: ESP8266_MANUAL_GUIDES["esp8266-d1d4"].downloadPath,
+    downloadLabel: ESP8266_MANUAL_GUIDES["esp8266-d1d4"].downloadLabel,
+    details: ESP8266_MANUAL_GUIDES["esp8266-d1d4"].details,
   },
   {
     board: "esp8266-servo",

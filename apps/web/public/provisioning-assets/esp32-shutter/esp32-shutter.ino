@@ -539,6 +539,16 @@ size_t buildStatusPayload(
   statusDoc["targetPercent"] = targetPercent;
   statusDoc["currentSteps"] = stepper.currentPosition();
   statusDoc["targetSteps"] = stepper.targetPosition();
+  statusDoc["reportedBoard"] = "esp32";
+  statusDoc["actuatorType"] = "stepper";
+  JsonArray reportedCapabilities =
+    statusDoc.createNestedArray("reportedCapabilities");
+  reportedCapabilities.add("set_percent");
+  reportedCapabilities.add("stop");
+  reportedCapabilities.add("nudge");
+  reportedCapabilities.add("calibration");
+  reportedCapabilities.add("movement_lock");
+  reportedCapabilities.add("factory_setup_ap");
   statusDoc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
   statusDoc["mqttConnected"] = mqttClient.connected();
   if (WiFi.status() == WL_CONNECTED) {

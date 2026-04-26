@@ -11,8 +11,10 @@ import {
   clampPercent,
   createDefaultDeviceStatus,
   isDeviceClaimState,
+  isDeviceActuatorType,
   isDeviceMode,
   isOtaState,
+  normalizeReportedBoardValue,
   type DeviceMode,
   type DeviceStatus,
   type OtaState,
@@ -50,6 +52,19 @@ function parseOptionalString(value: unknown): string | undefined {
 
 function parseOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function parseOptionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const nextValues = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+
+  return nextValues.length > 0 ? nextValues : undefined;
 }
 
 function parseDeviceMode(
@@ -173,6 +188,11 @@ export function parseStatusMessage(
       allowedMaxPercentStep: parseOptionalNumber(parsed.allowedMaxPercentStep),
       lastCalibrationAction: parseOptionalString(parsed.lastCalibrationAction),
       movementLockedReason: parseOptionalString(parsed.movementLockedReason),
+      reportedBoard: normalizeReportedBoardValue(parsed.reportedBoard),
+      actuatorType: isDeviceActuatorType(parsed.actuatorType)
+        ? parsed.actuatorType
+        : undefined,
+      reportedCapabilities: parseOptionalStringArray(parsed.reportedCapabilities),
     };
   } catch {
     return null;

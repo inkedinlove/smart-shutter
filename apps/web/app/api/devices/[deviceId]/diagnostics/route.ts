@@ -21,11 +21,14 @@ export async function GET(_request: Request, context: RouteContext) {
       classifyDeviceClaimState(device.deviceId),
     ]);
 
-    return apiOk(createDeviceDiagnostics(device.deviceId, claimState, status), {
+    return apiOk(
+      createDeviceDiagnostics(device.board, device.deviceId, claimState, status),
+      {
       headers: {
         "Cache-Control": "no-store",
       },
-    });
+      },
+    );
   } catch (error) {
     if (error instanceof AccessControlError) {
       return apiError(error.message, error.statusCode);
