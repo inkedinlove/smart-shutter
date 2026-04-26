@@ -12,7 +12,11 @@ import {
 } from "react";
 
 import AppNav from "@/app/_components/app-nav";
-import { fetchWithShortTimeout, readApiData } from "@/lib/client-fetch";
+import {
+  ApiRequestError,
+  fetchWithShortTimeout,
+  readApiData,
+} from "@/lib/client-fetch";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -30,6 +34,10 @@ function normalizeSignInErrorMessage(errorValue: string): string {
   } catch {
     return rawMessage;
   }
+}
+
+function isRegistrationConflictError(error: unknown): error is ApiRequestError {
+  return error instanceof ApiRequestError && error.status === 409;
 }
 
 function isRegisterResponseData(
@@ -122,15 +130,24 @@ function LoginContent() {
       }
     } catch (error) {
       startTransition(() => {
+        const registrationConflict =
+          mode === "register" && isRegistrationConflictError(error);
+
+        if (registrationConflict) {
+          setMode("signin");
+        }
+
         setErrorMessage(
           error instanceof Error
             ? error.message
             : "Unable to continue right now.",
         );
         setNextActionMessage(
-          mode === "register"
-            ? "Check your details, then try creating the account again."
-            : "Check your email and password, then try again.",
+          registrationConflict
+            ? "This email may already be tied to an account. Try signing in with the password you entered."
+            : mode === "register"
+              ? "Check your details, then try creating the account again."
+              : "Check your email and password, then try again.",
         );
       });
     } finally {

@@ -112,8 +112,69 @@ export async function createUserAccount(input: {
 
   const passwordHash = await hashPassword(input.password);
   const role = resolveRoleForEmail(email);
+  const conflictMessage =
+    "We couldn't create the account. Try signing in if you've used this email before.";
+
+  const existingUser = await db.user.findUnique({
+    where: {
+      email,
+    },
+    include: {
+      profile: true,
+    },
+  });
+
+  if (existingUser) {
+    throw new UserAccountError(conflictMessage, 409);
+  }
+
+  const existingProfile = await db.userProfile.findUnique({
+    where: {
+      email,
+    },
+  });
+
+  if (existingProfile?.userId) {
+    throw new UserAccountError(conflictMessage, 409);
+  }
 
   try {
+    if (existingProfile) {
+      const account = await db.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            name: displayName,
+            email,
+            passwordHash,
+            role,
+          },
+        });
+
+        const profile = await tx.userProfile.update({
+          where: {
+            id: existingProfile.id,
+          },
+          data: {
+            displayName,
+            userId: user.id,
+          },
+        });
+
+        return {
+          user,
+          profile,
+        };
+      });
+
+      return {
+        userId: account.user.id,
+        profileId: account.profile.id,
+        displayName: account.profile.displayName,
+        email,
+        role,
+      };
+    }
+
     const user = await db.user.create({
       data: {
         name: displayName,
@@ -148,10 +209,7 @@ export async function createUserAccount(input: {
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === "P2002"
     ) {
-      throw new UserAccountError(
-        "An account with this email already exists.",
-        409,
-      );
+      throw new UserAccountError(conflictMessage, 409);
     }
 
     throw error;

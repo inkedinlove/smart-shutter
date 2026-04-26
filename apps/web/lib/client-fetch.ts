@@ -9,6 +9,16 @@ type ShortFetchOptions = RequestInit & {
   timeoutMessage?: string;
 };
 
+export class ApiRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
+
 export class SessionRequiredError extends Error {
   constructor(message = "Your session has expired. Please sign in again.") {
     super(message);
@@ -61,7 +71,7 @@ export async function readApiData<T>(
       throw new SessionRequiredError(errorMessage);
     }
 
-    throw new Error(errorMessage);
+    throw new ApiRequestError(errorMessage, response.status);
   }
 
   if (!isApiSuccess(payload, isData)) {

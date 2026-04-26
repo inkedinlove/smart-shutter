@@ -159,7 +159,10 @@ export default function FlashPage() {
         </div>
       </section>
 
-      <EspWebToolsPanel />
+      <EspWebToolsPanel
+        selectedBoard={selectedDevice?.board ?? null}
+        selectedDeviceLabel={selectedDevice?.label ?? null}
+      />
     </AppShell>
   );
 }

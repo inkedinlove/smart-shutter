@@ -23,7 +23,7 @@ export const runtime = "nodejs";
 
 function sanitizeRegistrationError(error: UserAccountError): string {
   if (error.statusCode === 409) {
-    return "We couldn't create the account with those details.";
+    return "We couldn't create the account. Try signing in if you've used this email before.";
   }
 
   if (error.statusCode >= 500) {
