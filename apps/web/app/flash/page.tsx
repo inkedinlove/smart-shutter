@@ -452,6 +452,10 @@ export default function FlashPage() {
                   <div className="mt-3 text-sm text-slate-400">
                     {download.details}
                   </div>
+                  <div className="mt-2 text-sm text-slate-400">
+                    The ZIP now includes a placeholder <span className="font-mono text-white">config.h</span> so
+                    Arduino IDE can compile after the user fills in settings.
+                  </div>
                   {isSelectedBoard ? (
                     <div className="mt-3 text-xs uppercase tracking-[0.18em] text-cyan-100">
                       Recommended for the selected device

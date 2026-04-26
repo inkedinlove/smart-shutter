@@ -63,6 +63,7 @@ function New-FirmwarePackage {
 
   Copy-Item -LiteralPath $sourceInoPath -Destination (Join-Path $packageSketchDir "$SketchDirName.ino")
   Copy-Item -LiteralPath $sourceConfigPath -Destination (Join-Path $packageSketchDir "config.example.h")
+  Copy-Item -LiteralPath $sourceConfigPath -Destination (Join-Path $packageSketchDir "config.h")
 
   Write-Readme -Path (Join-Path $packageRoot "README.txt") -Lines $ReadmeLines
 
@@ -89,12 +90,13 @@ $esp8266Zip = New-FirmwarePackage `
     "Contents:",
     "- esp8266-shutter\esp8266-shutter.ino",
     "- esp8266-shutter\config.example.h",
+    "- esp8266-shutter\config.h",
     "",
     "Quick steps:",
     "1. Open Arduino IDE.",
     "2. Install the 'esp8266 by ESP8266 Community' board package.",
     "3. Open esp8266-shutter\esp8266-shutter.ino.",
-    "4. Copy config.example.h to config.h and edit it before flashing.",
+    "4. Edit config.h before flashing.",
     "5. For NodeMCU boards, use: NodeMCU 1.0 (ESP-12E Module).",
     "6. Upload, then watch Serial Monitor at 115200.",
     "",
@@ -111,12 +113,13 @@ $esp32Zip = New-FirmwarePackage `
     "Contents:",
     "- esp32-shutter\esp32-shutter.ino",
     "- esp32-shutter\config.example.h",
+    "- esp32-shutter\config.h",
     "",
     "Quick steps:",
     "1. Open Arduino IDE.",
     "2. Install the ESP32 board package if it is not already present.",
     "3. Open esp32-shutter\esp32-shutter.ino.",
-    "4. Copy config.example.h to config.h and edit it before flashing.",
+    "4. Edit config.h before flashing.",
     "5. Select the matching ESP32 board and COM port.",
     "6. Upload, then watch Serial Monitor at 115200.",
     "",

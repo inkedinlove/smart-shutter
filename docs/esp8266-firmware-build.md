@@ -16,6 +16,13 @@ download the public sketch package from:
 /downloads/smart-shutter-esp8266-sketch.zip
 ```
 
+That download now includes both:
+
+- `config.example.h`
+- `config.h`
+
+The user should edit `config.h` before uploading.
+
 ## What This Firmware Supports
 
 - the same Smart Shutter MQTT command topics as the ESP32 build
