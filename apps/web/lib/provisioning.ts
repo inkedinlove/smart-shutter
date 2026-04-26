@@ -27,6 +27,7 @@ export type ProvisioningDownloadInfo = {
 
 const DEFAULT_ESP32_FIRMWARE_VERSION = "0.1.0-dev";
 const DEFAULT_ESP8266_FIRMWARE_VERSION = "0.1.0-dev-esp8266";
+const DEFAULT_ESP8266_SERVO_FIRMWARE_VERSION = "0.1.0-dev-esp8266-servo";
 
 function toCString(value: string): string {
   return JSON.stringify(value);
@@ -39,6 +40,16 @@ function buildMqttClientId(deviceId: string): string {
 export function getProvisioningDownloadInfo(
   board: DeviceBoard,
 ): ProvisioningDownloadInfo {
+  if (board === "esp8266-servo") {
+    return {
+      boardLabel: "ESP8266 Servo",
+      downloadPath: "/downloads/smart-shutter-esp8266-servo-sketch.zip",
+      ideBoard: "NodeMCU 1.0 (ESP-12E Module)",
+      mainSketchFile: "esp8266-servo-shutter.ino",
+      sketchDirName: "esp8266-servo-shutter",
+    };
+  }
+
   if (board === "esp8266") {
     return {
       boardLabel: "ESP8266",
@@ -175,6 +186,85 @@ constexpr unsigned long MQTT_RETRY_MS = 5000;
 `;
 }
 
+function buildEsp8266ServoConfig(input: ProvisionedConfigInput): string {
+  const wifiSsid = input.wifiMode === "preconfigured" ? input.wifiSsid : "";
+  const wifiPassword =
+    input.wifiMode === "preconfigured" ? input.wifiPassword : "";
+
+  return `#pragma once
+
+// ---------------------------------------------------------------------------
+// WiFi and MQTT Credentials
+// ---------------------------------------------------------------------------
+
+// Leave WiFi blank to let WiFiManager start a SmartShutter setup network.
+constexpr const char* WIFI_SSID = ${toCString(wifiSsid)};
+constexpr const char* WIFI_PASSWORD = ${toCString(wifiPassword)};
+
+constexpr const char* MQTT_HOST = ${toCString(input.mqttHost)};
+constexpr int MQTT_PORT = ${input.mqttPort};
+constexpr const char* MQTT_USERNAME = ${toCString(input.mqttUsername)};
+constexpr const char* MQTT_PASSWORD = ${toCString(input.mqttPassword)};
+constexpr const char* MQTT_CLIENT_ID = ${toCString(buildMqttClientId(input.deviceId))};
+
+// Device identity and topics provisioned from Smart Shutter.
+constexpr const char* DEVICE_ID = ${toCString(input.deviceId)};
+#define FIRMWARE_VERSION "${DEFAULT_ESP8266_SERVO_FIRMWARE_VERSION}"
+constexpr const char* COMMAND_TOPIC = ${toCString(input.commandTopic)};
+constexpr const char* STATUS_TOPIC = ${toCString(input.statusTopic)};
+
+// ---------------------------------------------------------------------------
+// Factory Setup Mode
+// ---------------------------------------------------------------------------
+
+#define ENABLE_FACTORY_SETUP_MODE true
+#define SETUP_AP_SSID_PREFIX "SmartShutter-"
+#define SETUP_AP_PASSWORD ""
+#define SETUP_PORTAL_TIMEOUT_MS 300000
+
+// ---------------------------------------------------------------------------
+// OTA Update Settings
+// ---------------------------------------------------------------------------
+
+#define ENABLE_OTA_UPDATES false
+#define API_BASE_URL ${toCString(input.publicAppBaseUrl)}
+#define OTA_MANIFEST_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/manifest"
+
+// ---------------------------------------------------------------------------
+// Optional Behavior Flags
+// ---------------------------------------------------------------------------
+
+#define SAFE_SETUP_MODE true
+#define SAFE_ALLOWED_MAX_PERCENT_STEP 10
+#define SAFE_DEFAULT_NUDGE_PERCENT 2
+
+// ---------------------------------------------------------------------------
+// Servo Wiring and Motion Tuning
+// ---------------------------------------------------------------------------
+
+// Known-good default wiring for the servo-based ESP8266 board:
+// GPIO2 drives the servo signal and GPIO16 toggles the onboard activity LED.
+constexpr int SERVO_SIGNAL_PIN = 2;
+constexpr int STATUS_LED_PIN = 16;
+constexpr bool STATUS_LED_ACTIVE_LOW = true;
+
+constexpr int SERVO_CLOSED_ANGLE = 20;
+constexpr int SERVO_OPEN_ANGLE = 160;
+constexpr int SERVO_STARTUP_ANGLE = SERVO_CLOSED_ANGLE;
+constexpr int SERVO_STEP_DEGREES = 2;
+constexpr unsigned long SERVO_STEP_INTERVAL_MS = 25;
+
+// ---------------------------------------------------------------------------
+// Retry and Status Timing
+// ---------------------------------------------------------------------------
+
+constexpr unsigned long STATUS_INTERVAL_MS = 3000;
+constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
+constexpr unsigned long WIFI_RETRY_MS = 5000;
+constexpr unsigned long MQTT_RETRY_MS = 5000;
+`;
+}
+
 function buildEsp32Config(input: ProvisionedConfigInput): string {
   const wifiSsid = input.wifiMode === "preconfigured" ? input.wifiSsid : "";
   const wifiPassword =
@@ -267,6 +357,10 @@ constexpr const char* LOCAL_FALLBACK_AP_PASSWORD = "change-me";
 export function buildProvisionedConfig(
   input: ProvisionedConfigInput,
 ): string {
+  if (input.board === "esp8266-servo") {
+    return buildEsp8266ServoConfig(input);
+  }
+
   if (input.board === "esp8266") {
     return buildEsp8266Config(input);
   }

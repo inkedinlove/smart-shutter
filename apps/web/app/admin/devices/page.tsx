@@ -11,6 +11,7 @@ import {
   SessionRequiredError,
 } from "@/lib/client-fetch";
 import type { DeviceClaimState } from "@/lib/device";
+import { formatDeviceBoardLabel } from "@/lib/devices";
 
 type AdminDeviceRecord = {
   deviceId: string;
@@ -102,10 +103,6 @@ function formatCredentialLabel(value: string): string {
     .join(" ");
 }
 
-function formatBoardLabel(board: string): string {
-  return board.trim().toLowerCase() === "esp8266" ? "ESP8266" : "ESP32";
-}
-
 async function fetchAdminDevices(): Promise<AdminDeviceRecord[]> {
   const response = await fetchWithShortTimeout("/api/admin/devices", {
     cache: "no-store",
@@ -128,7 +125,9 @@ export default function AdminDevicesPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
-  const claimedCount = devices.filter((device) => device.claimState === "claimed").length;
+  const claimedCount = devices.filter(
+    (device) => device.claimState === "claimed",
+  ).length;
   const unclaimedCount = devices.filter(
     (device) => device.claimState === "unclaimed",
   ).length;
@@ -263,7 +262,7 @@ export default function AdminDevicesPage() {
         </p>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.95fr)]">
+      <section className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.95fr)]">
         <section className="dashboard-panel rounded-[1.2rem] p-6 sm:p-8">
           <div className="space-y-3">
             <div className="text-xs uppercase tracking-[0.3em] text-slate-400">
@@ -320,24 +319,24 @@ export default function AdminDevicesPage() {
                   key={device.deviceId}
                   className="rounded-[1rem] border border-white/10 bg-white/5 p-5"
                 >
-                  <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(140px,0.6fr)_minmax(0,0.9fr)_auto] lg:items-center">
-                    <div className="min-w-0">
+                  <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(180px,0.7fr)_minmax(0,1fr)] xl:items-start">
+                    <div className="min-w-0 space-y-3">
                       <div className="text-lg font-semibold text-white">
                         {device.label ?? "Unnamed device"}
                       </div>
-                      <div className="mt-2 wrap-anywhere font-mono text-sm text-cyan-100">
+                      <div className="break-all font-mono text-sm leading-6 text-cyan-100">
                         {device.deviceId}
                       </div>
-                      <div className="mt-3 inline-flex rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">
-                        {formatBoardLabel(device.board)}
+                      <div className="inline-flex rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">
+                        {formatDeviceBoardLabel(device.board)}
                       </div>
                     </div>
 
-                    <div>
+                    <div className="space-y-3">
                       <div className="text-xs uppercase tracking-[0.22em] text-slate-400">
                         Claim state
                       </div>
-                      <div className="mt-3">
+                      <div>
                         <span
                           className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${getClaimStateClasses(device.claimState)}`}
                         >
@@ -346,28 +345,28 @@ export default function AdminDevicesPage() {
                       </div>
                     </div>
 
-                    <div>
+                    <div className="min-w-0 space-y-3">
                       <div className="text-xs uppercase tracking-[0.22em] text-slate-400">
                         Owner
                       </div>
-                      <div className="mt-3 text-sm leading-6 text-slate-300">
+                      <div className="text-sm leading-6 text-slate-300">
                         {device.claimState === "claimed"
                           ? device.ownerProfileDisplayName ?? "Assigned"
                           : "No owner yet"}
                       </div>
-                      <div className="mt-3 text-xs uppercase tracking-[0.22em] text-slate-400">
+                      <div className="text-xs uppercase tracking-[0.22em] text-slate-400">
                         Credentials
                       </div>
-                      <div className="mt-2 text-sm leading-6 text-slate-300">
-                        {formatCredentialLabel(device.credentialMode)} •{" "}
+                      <div className="text-sm leading-6 text-slate-300">
+                        {formatCredentialLabel(device.credentialMode)} /{" "}
                         {formatCredentialLabel(device.credentialStatus)}
                       </div>
-                      <div className="mt-2 wrap-anywhere font-mono text-xs text-slate-400">
+                      <div className="break-all font-mono text-xs leading-6 text-slate-400">
                         {device.mqttClientId ?? "Client ID will be derived"}
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap gap-3 lg:justify-end">
+                    <div className="flex flex-wrap gap-3 xl:col-span-3 xl:border-t xl:border-white/10 xl:pt-5 xl:justify-end">
                       {device.claimState === "unclaimed" ? (
                         <Link
                           className="inline-flex items-center justify-center rounded-xl border border-cyan-300/30 bg-cyan-400/12 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/18"
@@ -377,7 +376,9 @@ export default function AdminDevicesPage() {
                         </Link>
                       ) : (
                         <span className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-semibold text-slate-300">
-                          {device.claimState === "claimed" ? "Already claimed" : "Pending"}
+                          {device.claimState === "claimed"
+                            ? "Already claimed"
+                            : "Pending"}
                         </span>
                       )}
                       <button
@@ -408,14 +409,16 @@ export default function AdminDevicesPage() {
           </p>
 
           <div className="mt-5 rounded-[1rem] border border-cyan-400/15 bg-cyan-400/8 p-4 text-sm leading-7 text-cyan-100">
-            Factory device IDs usually look like <span className="font-mono text-cyan-50">shutter-xxxxxx</span>.
-            Register the exact ID shown by firmware logs, MQTT status, or the setup
-            AP label before creating a claim.
+            Factory device IDs usually look like{" "}
+            <span className="font-mono text-cyan-50">shutter-xxxxxx</span>.
+            Register the exact ID shown by firmware logs, MQTT status, or the
+            setup AP label before creating a claim.
           </div>
 
           <div className="mt-4 rounded-[1rem] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300">
-            ESP32 devices can use the browser install path when supported. ESP8266 devices
-            should use the Arduino IDE or Arduino CLI manual flashing flow for now.
+            ESP32 devices can use the browser install path when supported. ESP8266
+            stepper and ESP8266 Servo devices should use the Arduino IDE or
+            Arduino CLI manual flashing flow for now.
           </div>
 
           <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
@@ -456,6 +459,7 @@ export default function AdminDevicesPage() {
               >
                 <option value="esp32">ESP32</option>
                 <option value="esp8266">ESP8266</option>
+                <option value="esp8266-servo">ESP8266 Servo</option>
               </select>
             </label>
 

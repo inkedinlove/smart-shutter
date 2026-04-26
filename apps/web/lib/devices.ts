@@ -1,8 +1,53 @@
 import devicesRegistry from "@/devices/devices.json";
 
 export type BrokerProfile = "hivemq-dev";
-export const DEVICE_BOARD_VALUES = ["esp32", "esp8266"] as const;
+export const DEVICE_BOARD_VALUES = [
+  "esp32",
+  "esp8266",
+  "esp8266-servo",
+] as const;
 export type DeviceBoard = (typeof DEVICE_BOARD_VALUES)[number];
+
+export type DeviceBoardFamily = "esp32" | "esp8266";
+
+export function normalizeDeviceBoardValue(value: string): DeviceBoard {
+  const normalizedValue = value.trim().toLowerCase();
+
+  if (DEVICE_BOARD_VALUES.includes(normalizedValue as DeviceBoard)) {
+    return normalizedValue as DeviceBoard;
+  }
+
+  return "esp32";
+}
+
+export function getDeviceBoardFamily(board: string): DeviceBoardFamily {
+  const normalizedBoard = normalizeDeviceBoardValue(board);
+  return normalizedBoard.startsWith("esp8266") ? "esp8266" : "esp32";
+}
+
+export function isEsp8266Board(board: string | null | undefined): boolean {
+  if (!board) {
+    return false;
+  }
+
+  return getDeviceBoardFamily(board) === "esp8266";
+}
+
+export function formatDeviceBoardLabel(
+  board: string | null | undefined,
+): string {
+  if (!board) {
+    return "ESP32";
+  }
+
+  const normalizedBoard = normalizeDeviceBoardValue(board);
+
+  if (normalizedBoard === "esp8266-servo") {
+    return "ESP8266 Servo";
+  }
+
+  return normalizedBoard === "esp8266" ? "ESP8266" : "ESP32";
+}
 
 export type ProfileSummary = {
   profileId: string;
@@ -85,7 +130,7 @@ export function createFirmwareDefinesPreview(
   broker: PublicBrokerConnection,
 ): string {
   return [
-    `// Board: ${device.board}`,
+    `// Board: ${formatDeviceBoardLabel(device.board)}`,
     `#define DEVICE_ID "${device.deviceId}"`,
     `#define FIRMWARE_VERSION "${DEFAULT_FIRMWARE_VERSION}"`,
     `#define MQTT_HOST "${broker.mqttHost}"`,

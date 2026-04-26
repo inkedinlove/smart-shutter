@@ -5,6 +5,11 @@ import Link from "next/link";
 import AppShell from "@/app/_components/app-shell";
 import EspWebToolsPanel from "@/app/flash/esp-web-tools-panel";
 import CopyButton from "@/app/setup/copy-button";
+import {
+  formatDeviceBoardLabel,
+  isEsp8266Board,
+  type DeviceBoard,
+} from "@/lib/devices";
 import { useDeviceRegistryWithOptions } from "@/lib/use-device-registry";
 
 export const dynamic = "force-dynamic";
@@ -39,8 +44,25 @@ const FLASH_STEPS = [
 
 const ESP8266_BOARD_MANAGER_URL =
   "http://arduino.esp8266.com/stable/package_esp8266com_index.json";
-const ESP8266_DOWNLOAD_PATH = "/downloads/smart-shutter-esp8266-sketch.zip";
+const ESP8266_STEPPER_DOWNLOAD_PATH = "/downloads/smart-shutter-esp8266-sketch.zip";
+const ESP8266_SERVO_DOWNLOAD_PATH =
+  "/downloads/smart-shutter-esp8266-servo-sketch.zip";
 const ESP32_DOWNLOAD_PATH = "/downloads/smart-shutter-esp32-sketch.zip";
+
+type Esp8266Guide = {
+  board: Extract<DeviceBoard, "esp8266" | "esp8266-servo">;
+  boardLabel: string;
+  title: string;
+  description: string;
+  sketchDir: string;
+  mainSketchFile: string;
+  downloadPath: string;
+  downloadLabel: string;
+  details: string;
+  compileCommand: string;
+  compileAndUploadCommand: string;
+  bootLogLine: string;
+};
 
 const ESP8266_BOARD_PROFILES = [
   {
@@ -68,15 +90,6 @@ const ESP8266_COM_PORT_STEPS = [
   "Close Serial Monitor or any other app that might already be using the COM port before uploading.",
 ] as const;
 
-const ESP8266_ARDUINO_IDE_STEPS = [
-  "Open Arduino IDE 2.x and install `esp8266 by ESP8266 Community` from Boards Manager.",
-  "In `File -> Preferences`, add the ESP8266 board manager URL if it is missing.",
-  "Open `firmware/esp8266-shutter/esp8266-shutter.ino` from this repo.",
-  "Choose the closest board profile from the list below, then choose the COM port you found in Device Manager.",
-  "Click Verify, then Upload. If upload stalls, hold the board's BOOT or FLASH button while upload starts on some clones.",
-  "After upload, open Serial Monitor at `115200` and look for `Smart Shutter ESP8266 booting...`.",
-] as const;
-
 const ESP8266_UPLOAD_REMINDERS = [
   "Leave `WIFI_SSID` blank for setup-mode recovery installs.",
   "After flashing, return to `/connect` and wait for the setup AP or MQTT status.",
@@ -84,21 +97,84 @@ const ESP8266_UPLOAD_REMINDERS = [
   "If upload fails repeatedly, unplug and replug the board so the COM port resets.",
 ] as const;
 
-const ESP8266_COMPILE_COMMAND =
-  "powershell -ExecutionPolicy Bypass -File .\\scripts\\compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2 -SketchDir .\\firmware\\esp8266-shutter -OutputDir .\\.arduino-build\\firmware\\esp8266-shutter";
+const ESP8266_MANUAL_GUIDES: Record<
+  Extract<DeviceBoard, "esp8266" | "esp8266-servo">,
+  Esp8266Guide
+> = {
+  esp8266: {
+    board: "esp8266",
+    boardLabel: "ESP8266",
+    title: "ESP8266 stepper package",
+    description:
+      "For NodeMCU, D1 mini, and other ESP8266-family boards using the stepper-motor Smart Shutter build.",
+    sketchDir: "firmware\\esp8266-shutter",
+    mainSketchFile: "esp8266-shutter.ino",
+    downloadPath: ESP8266_STEPPER_DOWNLOAD_PATH,
+    downloadLabel: "Download ESP8266 ZIP",
+    details: "Open `esp8266-shutter.ino` after unzipping the package.",
+    compileCommand:
+      "powershell -ExecutionPolicy Bypass -File .\\scripts\\compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2 -SketchDir .\\firmware\\esp8266-shutter -OutputDir .\\.arduino-build\\firmware\\esp8266-shutter",
+    compileAndUploadCommand:
+      "arduino-cli compile --upload -p COM7 --fqbn esp8266:esp8266:nodemcuv2 .\\firmware\\esp8266-shutter",
+    bootLogLine: "Smart Shutter ESP8266 booting...",
+  },
+  "esp8266-servo": {
+    board: "esp8266-servo",
+    boardLabel: "ESP8266 Servo",
+    title: "ESP8266 servo compatibility package",
+    description:
+      "For servo-based ESP8266 boards that already work with WiFiManager and Servo sketches and need the Smart Shutter MQTT contract.",
+    sketchDir: "firmware\\esp8266-servo-shutter",
+    mainSketchFile: "esp8266-servo-shutter.ino",
+    downloadPath: ESP8266_SERVO_DOWNLOAD_PATH,
+    downloadLabel: "Download ESP8266 Servo ZIP",
+    details:
+      "Open `esp8266-servo-shutter.ino` after unzipping the package.",
+    compileCommand:
+      "powershell -ExecutionPolicy Bypass -File .\\scripts\\compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2 -SketchDir .\\firmware\\esp8266-servo-shutter -OutputDir .\\.arduino-build\\firmware\\esp8266-servo-shutter",
+    compileAndUploadCommand:
+      "arduino-cli compile --upload -p COM7 --fqbn esp8266:esp8266:nodemcuv2 .\\firmware\\esp8266-servo-shutter",
+    bootLogLine: "Smart Shutter ESP8266 Servo booting...",
+  },
+};
 
-const ESP8266_COMPILE_AND_UPLOAD_COMMAND =
-  "arduino-cli compile --upload -p COM7 --fqbn esp8266:esp8266:nodemcuv2 .\\firmware\\esp8266-shutter";
+function getEsp8266Guide(
+  board: string | null | undefined,
+): Esp8266Guide {
+  if (board?.trim().toLowerCase() === "esp8266-servo") {
+    return ESP8266_MANUAL_GUIDES["esp8266-servo"];
+  }
+
+  return ESP8266_MANUAL_GUIDES.esp8266;
+}
+
+function buildEsp8266ArduinoIdeSteps(guide: Esp8266Guide): string[] {
+  return [
+    "Open Arduino IDE 2.x and install `esp8266 by ESP8266 Community` from Boards Manager.",
+    "In `File -> Preferences`, add the ESP8266 board manager URL if it is missing.",
+    `Open \`${guide.sketchDir}\\${guide.mainSketchFile}\` from this repo or from the downloaded ZIP.`,
+    "Choose the closest board profile from the list below, then choose the COM port you found in Device Manager.",
+    "Click Verify, then Upload. If upload stalls, hold the board's BOOT or FLASH button while upload starts on some clones.",
+    `After upload, open Serial Monitor at \`115200\` and look for \`${guide.bootLogLine}\`.`,
+  ];
+}
 
 const MANUAL_DOWNLOADS = [
   {
     board: "esp8266",
-    title: "ESP8266 sketch package",
-    description:
-      "For NodeMCU, D1 mini, and other ESP8266-family boards that need Arduino IDE recovery.",
-    downloadPath: ESP8266_DOWNLOAD_PATH,
-    downloadLabel: "Download ESP8266 ZIP",
-    details: "Open `esp8266-shutter.ino` after unzipping the package.",
+    title: ESP8266_MANUAL_GUIDES.esp8266.title,
+    description: ESP8266_MANUAL_GUIDES.esp8266.description,
+    downloadPath: ESP8266_MANUAL_GUIDES.esp8266.downloadPath,
+    downloadLabel: ESP8266_MANUAL_GUIDES.esp8266.downloadLabel,
+    details: ESP8266_MANUAL_GUIDES.esp8266.details,
+  },
+  {
+    board: "esp8266-servo",
+    title: ESP8266_MANUAL_GUIDES["esp8266-servo"].title,
+    description: ESP8266_MANUAL_GUIDES["esp8266-servo"].description,
+    downloadPath: ESP8266_MANUAL_GUIDES["esp8266-servo"].downloadPath,
+    downloadLabel: ESP8266_MANUAL_GUIDES["esp8266-servo"].downloadLabel,
+    details: ESP8266_MANUAL_GUIDES["esp8266-servo"].details,
   },
   {
     board: "esp32",
@@ -121,6 +197,12 @@ export default function FlashPage() {
   } = useDeviceRegistryWithOptions({
     redirectOnUnauthorized: false,
   });
+  const selectedEsp8266Guide = isEsp8266Board(selectedDevice?.board)
+    ? getEsp8266Guide(selectedDevice?.board)
+    : null;
+  const esp8266ArduinoIdeSteps = selectedEsp8266Guide
+    ? buildEsp8266ArduinoIdeSteps(selectedEsp8266Guide)
+    : [];
 
   return (
     <AppShell
@@ -182,19 +264,23 @@ export default function FlashPage() {
           </p>
         </div>
 
-        {selectedDevice?.board === "esp8266" ? (
+        {selectedEsp8266Guide ? (
           <>
             <div className="mt-6 rounded-[1rem] border border-cyan-400/20 bg-cyan-400/10 p-5">
               <div className="text-xs uppercase tracking-[0.24em] text-cyan-100/80">
                 Selected device board
               </div>
               <h2 className="mt-2 text-2xl font-semibold text-white">
-                ESP8266 uses the manual USB path
+                {selectedEsp8266Guide.boardLabel} uses the manual USB path
               </h2>
               <p className="mt-3 max-w-3xl text-sm leading-7 text-cyan-50/90">
                 Browser install on this page is currently for supported ESP32 builds only.
-                For this device, flash <span className="font-mono text-cyan-50">firmware/esp8266-shutter</span>
-                with Arduino IDE or Arduino CLI, then return to <span className="font-mono text-cyan-50">/connect</span>.
+                For this device, flash{" "}
+                <span className="font-mono text-cyan-50">
+                  {selectedEsp8266Guide.sketchDir}
+                </span>{" "}
+                with Arduino IDE or Arduino CLI, then return to{" "}
+                <span className="font-mono text-cyan-50">/connect</span>.
               </p>
             </div>
 
@@ -299,7 +385,7 @@ export default function FlashPage() {
                 </div>
 
                 <div className="mt-4 space-y-3">
-                  {ESP8266_ARDUINO_IDE_STEPS.map((step, index) => (
+                  {esp8266ArduinoIdeSteps.map((step, index) => (
                     <div
                       key={step}
                       className="rounded-[0.9rem] border border-white/10 bg-black/20 p-4"
@@ -327,7 +413,7 @@ export default function FlashPage() {
                   </div>
                   <CopyButton
                     label="Copy compile command"
-                    value={ESP8266_COMPILE_COMMAND}
+                    value={selectedEsp8266Guide.compileCommand}
                   />
                 </div>
 
@@ -336,7 +422,7 @@ export default function FlashPage() {
                     Compile from repo root
                   </div>
                   <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-cyan-100">
-                    {ESP8266_COMPILE_COMMAND}
+                    {selectedEsp8266Guide.compileCommand}
                   </pre>
                 </div>
 
@@ -347,11 +433,11 @@ export default function FlashPage() {
                     </div>
                     <CopyButton
                       label="Copy upload command"
-                      value={ESP8266_COMPILE_AND_UPLOAD_COMMAND}
+                      value={selectedEsp8266Guide.compileAndUploadCommand}
                     />
                   </div>
                   <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-cyan-100">
-                    {ESP8266_COMPILE_AND_UPLOAD_COMMAND}
+                    {selectedEsp8266Guide.compileAndUploadCommand}
                   </pre>
                   <div className="mt-3 text-sm leading-7 text-slate-300">
                     Replace <span className="font-mono text-white">COM7</span> with the
@@ -426,10 +512,12 @@ export default function FlashPage() {
             </div>
           </div>
 
-          <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          <div className="mt-5 grid gap-4 xl:grid-cols-3">
             {MANUAL_DOWNLOADS.map((download) => {
-              const isSelectedBoard =
-                selectedDevice?.board?.trim().toLowerCase() === download.board;
+              const normalizedSelectedBoard =
+                selectedDevice?.board?.trim().toLowerCase() ?? "";
+              const isSelectedBoard = normalizedSelectedBoard === download.board;
+              const boardLabel = formatDeviceBoardLabel(download.board);
 
               return (
                 <div
@@ -441,7 +529,7 @@ export default function FlashPage() {
                   }`}
                 >
                   <div className="text-xs uppercase tracking-[0.22em] text-slate-400">
-                    {download.board.toUpperCase()}
+                    {boardLabel}
                   </div>
                   <div className="mt-2 text-xl font-semibold text-white">
                     {download.title}

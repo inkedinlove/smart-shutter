@@ -4,6 +4,7 @@ import Script from "next/script";
 import { useEffect, useMemo, useState } from "react";
 
 import { fetchWithShortTimeout } from "@/lib/client-fetch";
+import { formatDeviceBoardLabel, isEsp8266Board } from "@/lib/devices";
 
 const ESP_WEB_TOOLS_SCRIPT_URL =
   "https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module";
@@ -66,8 +67,12 @@ function getSerialApi(): SerialApiLike | null {
   return serialNavigator.serial ?? null;
 }
 
-function formatBoardLabel(board: string | null | undefined): string {
-  return board?.trim().toLowerCase() === "esp8266" ? "ESP8266" : "ESP32";
+function getEsp8266CompileCommand(board: string | null | undefined): string {
+  if (board?.trim().toLowerCase() === "esp8266-servo") {
+    return "powershell -ExecutionPolicy Bypass -File scripts/compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2 -SketchDir firmware/esp8266-servo-shutter -OutputDir .arduino-build/firmware/esp8266-servo-shutter";
+  }
+
+  return "powershell -ExecutionPolicy Bypass -File scripts/compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2 -SketchDir firmware/esp8266-shutter -OutputDir .arduino-build/firmware/esp8266-shutter";
 }
 
 export default function EspWebToolsPanel({
@@ -82,9 +87,13 @@ export default function EspWebToolsPanel({
     null,
   );
 
-  const isEsp8266Selected = selectedBoard?.trim().toLowerCase() === "esp8266";
+  const isEsp8266Selected = isEsp8266Board(selectedBoard);
   const selectedBoardLabel = useMemo(
-    () => formatBoardLabel(selectedBoard),
+    () => formatDeviceBoardLabel(selectedBoard),
+    [selectedBoard],
+  );
+  const esp8266CompileCommand = useMemo(
+    () => getEsp8266CompileCommand(selectedBoard),
     [selectedBoard],
   );
 
@@ -283,17 +292,12 @@ export default function EspWebToolsPanel({
               </div>
               <div className="mt-2">
                 Smart Shutter only publishes ESP32 builds to the browser install
-                manifest right now. Use Arduino IDE or Arduino CLI for this
-                board, then return to <span className="font-mono">/connect</span>.
+                manifest right now. Use Arduino IDE or Arduino CLI for this{" "}
+                {selectedBoardLabel} board, then return to{" "}
+                <span className="font-mono">/connect</span>.
               </div>
               <div className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs text-cyan-100">
-                powershell -ExecutionPolicy Bypass -File scripts/compile-firmware.ps1
-                {" "}
-                -Fqbn esp8266:esp8266:nodemcuv2
-                {" "}
-                -SketchDir firmware/esp8266-shutter
-                {" "}
-                -OutputDir .arduino-build/firmware/esp8266-shutter
+                {esp8266CompileCommand}
               </div>
             </div>
           ) : (

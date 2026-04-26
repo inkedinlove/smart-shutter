@@ -110,6 +110,28 @@ $esp8266Zip = New-FirmwarePackage `
     "- Open /flash on Smart Shutter for the latest recovery steps."
   )
 
+$esp8266ServoZip = New-FirmwarePackage `
+  -SketchDirName "esp8266-servo-shutter" `
+  -ZipBaseName "smart-shutter-esp8266-servo-sketch" `
+  -ReadmeLines @(
+    "Smart Shutter ESP8266 Servo Sketch Package",
+    "",
+    "Contents:",
+    "- esp8266-servo-shutter\esp8266-servo-shutter.ino",
+    "- esp8266-servo-shutter\config.example.h",
+    "- esp8266-servo-shutter\config.h",
+    "",
+    "Quick steps:",
+    "1. Open Arduino IDE.",
+    "2. Install the 'esp8266 by ESP8266 Community' board package.",
+    "3. Open esp8266-servo-shutter\esp8266-servo-shutter.ino.",
+    "4. Use: NodeMCU 1.0 (ESP-12E Module), or the closest ESP8266 board match.",
+    "5. Upload, then watch Serial Monitor at 115200.",
+    "",
+    "Site help:",
+    "- Open /flash on Smart Shutter for the latest recovery steps."
+  )
+
 $esp32Zip = New-FirmwarePackage `
   -SketchDirName "esp32-shutter" `
   -ZipBaseName "smart-shutter-esp32-sketch" `
@@ -135,6 +157,7 @@ $esp32Zip = New-FirmwarePackage `
 
 Write-Host "Created firmware download packages:"
 Write-Host " - $esp8266Zip"
+Write-Host " - $esp8266ServoZip"
 Write-Host " - $esp32Zip"
 
 if (Test-Path -LiteralPath $tempRoot) {

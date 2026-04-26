@@ -4,9 +4,10 @@ import type { Device as PrismaDevice, UserProfile as PrismaUserProfile } from "@
 
 import { getDb, isDatabaseConfigured } from "@/lib/db";
 import {
-  DEVICE_BOARD_VALUES,
+  formatDeviceBoardLabel as formatDeviceBoardLabelText,
   getStaticDeviceById,
   listStaticRegisteredDevices,
+  normalizeDeviceBoardValue,
   type DeviceBoard,
   type RegisteredDevice,
 } from "@/lib/devices";
@@ -31,10 +32,7 @@ function normalizeDeviceBoard(value: unknown): DeviceBoard {
     return DEFAULT_DEVICE_BOARD;
   }
 
-  const normalizedValue = value.trim().toLowerCase();
-  return DEVICE_BOARD_VALUES.includes(normalizedValue as DeviceBoard)
-    ? (normalizedValue as DeviceBoard)
-    : DEFAULT_DEVICE_BOARD;
+  return normalizeDeviceBoardValue(value);
 }
 
 export type DeviceRegistrationState = {
@@ -332,6 +330,5 @@ export function describeClaimState(claimState: DeviceClaimState): string {
 }
 
 export function formatDeviceBoardLabel(board: string): string {
-  const normalizedBoard = normalizeDeviceBoard(board);
-  return normalizedBoard === "esp8266" ? "ESP8266" : "ESP32";
+  return formatDeviceBoardLabelText(board);
 }
