@@ -2,6 +2,7 @@ import { apiError, apiOk } from "@/lib/api-response";
 import {
   assertRateLimit,
   buildRateLimitKey,
+  clearRateLimit,
   getRequestIpAddress,
   RateLimitError,
 } from "@/lib/rate-limit";
@@ -32,6 +33,28 @@ function sanitizeRegistrationError(error: UserAccountError): string {
   return error.message;
 }
 
+function buildAuthRegistrationRateLimitKey(
+  request: Request,
+  email: string,
+): string {
+  const normalizedEmail = normalizeEmail(email);
+  const requestIpAddress = getRequestIpAddress(request);
+
+  if (requestIpAddress && requestIpAddress !== "unknown" && normalizedEmail) {
+    return buildRateLimitKey("ip", requestIpAddress, "email", normalizedEmail);
+  }
+
+  if (normalizedEmail) {
+    return buildRateLimitKey("email", normalizedEmail);
+  }
+
+  if (requestIpAddress && requestIpAddress !== "unknown") {
+    return buildRateLimitKey("ip", requestIpAddress);
+  }
+
+  return buildRateLimitKey("anonymous-register");
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as unknown;
@@ -44,11 +67,12 @@ export async function POST(request: Request) {
       typeof body.displayName === "string" ? body.displayName : "";
     const email = typeof body.email === "string" ? body.email : "";
     const password = typeof body.password === "string" ? body.password : "";
+    const rateLimitKey = buildAuthRegistrationRateLimitKey(request, email);
 
     assertRateLimit({
       bucket: "auth-register",
-      key: buildRateLimitKey(getRequestIpAddress(request), normalizeEmail(email)),
-      limit: 4,
+      key: rateLimitKey,
+      limit: 8,
       windowMs: 10 * 60_000,
       message:
         "Too many account creation attempts. Wait a few minutes, then try again.",
@@ -58,6 +82,11 @@ export async function POST(request: Request) {
       displayName,
       email,
       password,
+    });
+
+    clearRateLimit({
+      bucket: "auth-register",
+      key: rateLimitKey,
     });
 
     return apiOk(

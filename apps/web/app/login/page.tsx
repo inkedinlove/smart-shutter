@@ -18,6 +18,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function normalizeSignInErrorMessage(errorValue: string): string {
+  const rawMessage = errorValue.trim();
+
+  if (!rawMessage || rawMessage === "CredentialsSignin") {
+    return "We couldn't sign you in with that email and password.";
+  }
+
+  try {
+    return decodeURIComponent(rawMessage);
+  } catch {
+    return rawMessage;
+  }
+}
+
 function isRegisterResponseData(
   value: unknown,
 ): value is {
@@ -61,8 +75,12 @@ function LoginContent() {
       callbackUrl,
     });
 
-    if (!result || result.error) {
-      throw new Error("We couldn't sign you in with that email and password.");
+    if (!result) {
+      throw new Error("Unable to sign you in right now.");
+    }
+
+    if (result.error) {
+      throw new Error(normalizeSignInErrorMessage(result.error));
     }
 
     router.push(result.url ?? callbackUrl);

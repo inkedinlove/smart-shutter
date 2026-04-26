@@ -145,3 +145,10 @@ export function assertRateLimit(input: {
   existingEntry.count += 1;
   rateLimitBuckets.set(compositeKey, existingEntry);
 }
+
+export function clearRateLimit(input: {
+  bucket: string;
+  key: string;
+}): void {
+  rateLimitBuckets.delete(`${input.bucket}:${input.key}`);
+}

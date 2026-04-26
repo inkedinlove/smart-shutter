@@ -10,6 +10,7 @@ import { verifyPassword } from "@/lib/passwords";
 import {
   assertRateLimit,
   buildRateLimitKey,
+  clearRateLimit,
   getIpAddressFromHeaders,
   RateLimitError,
 } from "@/lib/rate-limit";
@@ -41,6 +42,28 @@ function getAuthSecret(): string {
 }
 
 const AUTH_SECRET = getAuthSecret();
+
+function buildAuthSignInRateLimitKey(input: {
+  email: string;
+  headers: Headers | Record<string, string | string[] | undefined> | undefined;
+}): string {
+  const normalizedEmail = normalizeEmail(input.email);
+  const requestIpAddress = getIpAddressFromHeaders(input.headers);
+
+  if (requestIpAddress && requestIpAddress !== "unknown" && normalizedEmail) {
+    return buildRateLimitKey("ip", requestIpAddress, "email", normalizedEmail);
+  }
+
+  if (normalizedEmail) {
+    return buildRateLimitKey("email", normalizedEmail);
+  }
+
+  if (requestIpAddress && requestIpAddress !== "unknown") {
+    return buildRateLimitKey("ip", requestIpAddress);
+  }
+
+  return buildRateLimitKey("anonymous-sign-in");
+}
 
 export const authOptions: NextAuthOptions = {
   adapter: getAdapter(),
@@ -85,21 +108,23 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
+        const rateLimitKey = buildAuthSignInRateLimitKey({
+          email,
+          headers: req?.headers,
+        });
+
         try {
           assertRateLimit({
             bucket: "auth-sign-in",
-            key: buildRateLimitKey(
-              getIpAddressFromHeaders(req?.headers),
-              email,
-            ),
-            limit: 6,
+            key: rateLimitKey,
+            limit: 10,
             windowMs: 5 * 60_000,
             message:
               "Too many sign-in attempts. Wait a few minutes, then try again.",
           });
         } catch (error) {
           if (error instanceof RateLimitError) {
-            return null;
+            throw new Error(error.message);
           }
 
           throw error;
@@ -123,6 +148,11 @@ export const authOptions: NextAuthOptions = {
         if (!passwordMatches) {
           return null;
         }
+
+        clearRateLimit({
+          bucket: "auth-sign-in",
+          key: rateLimitKey,
+        });
 
         return {
           id: user.id,
