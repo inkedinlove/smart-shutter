@@ -5,7 +5,7 @@ import Link from "next/link";
 import AppShell from "@/app/_components/app-shell";
 import EspWebToolsPanel from "@/app/flash/esp-web-tools-panel";
 import CopyButton from "@/app/setup/copy-button";
-import { useDeviceRegistry } from "@/lib/use-device-registry";
+import { useDeviceRegistryWithOptions } from "@/lib/use-device-registry";
 
 export const dynamic = "force-dynamic";
 
@@ -118,7 +118,9 @@ export default function FlashPage() {
     selectedDevice,
     selectedDeviceId,
     setSelectedDeviceId,
-  } = useDeviceRegistry();
+  } = useDeviceRegistryWithOptions({
+    redirectOnUnauthorized: false,
+  });
 
   return (
     <AppShell
@@ -127,6 +129,7 @@ export default function FlashPage() {
       isLoadingDevices={isLoadingDevices}
       selectedDeviceId={selectedDeviceId}
       onSelectDevice={setSelectedDeviceId}
+      emptyDeviceLabel="Sign in to load your devices"
     >
       <section className="dashboard-panel rounded-[1.2rem] p-6 sm:p-8 lg:p-10">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">

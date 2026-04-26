@@ -30,6 +30,12 @@ function isDevicesResponse(value: unknown): value is DevicesResponse {
 }
 
 export function useDeviceRegistry() {
+  return useDeviceRegistryWithOptions();
+}
+
+export function useDeviceRegistryWithOptions(options?: {
+  redirectOnUnauthorized?: boolean;
+}) {
   const [devices, setDevices] = useState<RegisteredDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceIdState] = useState("");
   const [isLoadingDevices, setIsLoadingDevices] = useState(true);
@@ -37,6 +43,7 @@ export function useDeviceRegistry() {
   const [deviceRegistryError, setDeviceRegistryError] = useState<string | null>(
     null,
   );
+  const redirectOnUnauthorized = options?.redirectOnUnauthorized ?? true;
 
   useEffect(() => {
     let isCancelled = false;
@@ -85,7 +92,15 @@ export function useDeviceRegistry() {
         }
 
         if (error instanceof SessionRequiredError) {
-          redirectToLogin();
+          if (redirectOnUnauthorized) {
+            redirectToLogin();
+          } else {
+            startTransition(() => {
+              setDevices([]);
+              setSelectedDeviceIdState("");
+              setDeviceRegistryError(null);
+            });
+          }
           return;
         }
 
@@ -106,7 +121,7 @@ export function useDeviceRegistry() {
     return () => {
       isCancelled = true;
     };
-  }, [reloadToken]);
+  }, [redirectOnUnauthorized, reloadToken]);
 
   useEffect(() => {
     if (!selectedDeviceId || typeof window === "undefined") {

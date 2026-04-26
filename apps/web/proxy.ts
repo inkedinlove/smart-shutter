@@ -20,8 +20,7 @@ function isAdminProtectedPath(pathname: string): boolean {
   return (
     pathname.startsWith("/admin") ||
     pathname === "/firmware/releases" ||
-    pathname === "/setup" ||
-    pathname === "/flash"
+    pathname === "/setup"
   );
 }
 
@@ -78,7 +77,6 @@ export const config = {
     "/setup-device",
     "/firmware",
     "/firmware/releases",
-    "/flash",
     "/setup",
     "/admin/:path*",
   ],

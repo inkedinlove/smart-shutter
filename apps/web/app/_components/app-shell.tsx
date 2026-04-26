@@ -16,6 +16,7 @@ type AppShellProps = {
     href: string;
     label: string;
   }>;
+  emptyDeviceLabel?: string;
 };
 
 export default function AppShell({
@@ -26,6 +27,7 @@ export default function AppShell({
   onSelectDevice,
   isLoadingDevices = false,
   extraNavLinks = [],
+  emptyDeviceLabel = "No device selected",
 }: AppShellProps) {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-[92rem] flex-col gap-5 px-4 py-4 sm:px-6 sm:py-5 lg:px-8">
@@ -70,7 +72,9 @@ export default function AppShell({
                 }}
               >
                 {devices.length === 0 ? (
-                  <option value="">Loading devices...</option>
+                  <option value="">
+                    {isLoadingDevices ? "Loading devices..." : emptyDeviceLabel}
+                  </option>
                 ) : (
                   devices.map((device) => (
                     <option key={device.deviceId} value={device.deviceId}>
