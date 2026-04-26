@@ -203,6 +203,11 @@ export function getAlexaOauthClientConfig(): {
   };
 }
 
+function normalizePublicBaseUrl(value: string | undefined): string {
+  const normalized = value?.trim() ?? "";
+  return normalized.replace(/\/+$/, "");
+}
+
 export function getAlexaPublicSetupConfig(): {
   enabled: boolean;
   baseUrl: string;
@@ -212,7 +217,7 @@ export function getAlexaPublicSetupConfig(): {
   smartHomeUrl: string;
   usesPkce: boolean;
 } {
-  const baseUrl = process.env.PUBLIC_APP_BASE_URL?.trim() ?? "";
+  const baseUrl = normalizePublicBaseUrl(process.env.PUBLIC_APP_BASE_URL);
   const clientId = getConfiguredAlexaClientId();
 
   return {

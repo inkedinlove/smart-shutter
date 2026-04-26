@@ -683,6 +683,8 @@ Current first-pass implementation:
 - smart home route: `/api/integrations/alexa/smart-home`
 - OAuth authorization route: `/api/integrations/alexa/authorize`
 - OAuth token route: `/api/integrations/alexa/token`
+- optional AWS Lambda bridge scaffold for the smart home endpoint:
+  [docs/alexa-lambda-bridge.md](docs/alexa-lambda-bridge.md)
 - discovery maps linked-account devices and also supports admin-linked testing
 - report state uses live MQTT device status
 - command execution publishes the same MQTT control payloads as the web app
