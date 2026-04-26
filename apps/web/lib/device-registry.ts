@@ -116,15 +116,27 @@ export async function getRegisteredDeviceById(
 }
 
 export async function getDefaultRegisteredDevice(): Promise<RegisteredDevice> {
-  const defaultDeviceId = getFallbackDefaultDeviceId();
-  const defaultDevice = await getRegisteredDeviceById(defaultDeviceId);
+  const databaseDevices = await readDatabaseDevices();
 
-  if (defaultDevice) {
-    return defaultDevice;
+  if (databaseDevices && databaseDevices.length > 0) {
+    const fallbackDefaultDeviceId = getFallbackDefaultDeviceId();
+
+    return (
+      databaseDevices.find(
+        (device) => device.deviceId === fallbackDefaultDeviceId,
+      ) ?? databaseDevices[0]
+    );
   }
 
-  const devices = await listAvailableDevices();
-  return devices[0];
+  const fallbackDefaultDeviceId = getFallbackDefaultDeviceId();
+  const fallbackDefaultDevice = getStaticDeviceById(fallbackDefaultDeviceId);
+
+  if (fallbackDefaultDevice) {
+    return fallbackDefaultDevice;
+  }
+
+  const fallbackDevices = listStaticRegisteredDevices();
+  return fallbackDevices[0];
 }
 
 export async function getDefaultRegisteredDeviceId(): Promise<string> {

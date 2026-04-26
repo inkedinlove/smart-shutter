@@ -22,6 +22,22 @@ type ProvisioningManagerProps = {
   devices: RegisteredDevice[];
 };
 
+function resolveInitialSelectedDeviceId(
+  defaultDeviceId: string,
+  devices: RegisteredDevice[],
+): string {
+  const normalizedDefaultDeviceId = defaultDeviceId.trim();
+
+  if (
+    normalizedDefaultDeviceId &&
+    devices.some((device) => device.deviceId === normalizedDefaultDeviceId)
+  ) {
+    return normalizedDefaultDeviceId;
+  }
+
+  return devices[0]?.deviceId ?? "";
+}
+
 function parseFileNameFromContentDisposition(
   contentDisposition: string | null,
   fallbackFileName: string,
@@ -59,7 +75,7 @@ export default function ProvisioningManager({
   devices,
 }: ProvisioningManagerProps) {
   const [selectedDeviceId, setSelectedDeviceId] = useState(
-    defaultDeviceId || devices[0]?.deviceId || "",
+    resolveInitialSelectedDeviceId(defaultDeviceId, devices),
   );
   const [wifiMode, setWifiMode] = useState<ProvisioningWifiMode>("factory");
   const [wifiSsid, setWifiSsid] = useState("");
