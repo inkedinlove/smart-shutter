@@ -35,6 +35,16 @@ function normalizeDeviceBoard(value: unknown): DeviceBoard {
   return normalizeDeviceBoardValue(value);
 }
 
+export class DeviceRegistrationError extends Error {
+  statusCode: number;
+
+  constructor(message: string, statusCode = 400) {
+    super(message);
+    this.name = "DeviceRegistrationError";
+    this.statusCode = statusCode;
+  }
+}
+
 export type DeviceRegistrationState = {
   deviceId: string;
   label: string | null;
@@ -262,7 +272,10 @@ export async function registerDeviceIfMissing(input: {
   const db = getDb();
 
   if (!isDatabaseConfigured() || !db) {
-    throw new Error("Device registration requires the database-backed registry.");
+    throw new DeviceRegistrationError(
+      "Device registration requires the database-backed registry.",
+      503,
+    );
   }
 
   const deviceId = input.deviceId.trim();
@@ -270,11 +283,11 @@ export async function registerDeviceIfMissing(input: {
   const board = normalizeDeviceBoard(input.board);
 
   if (!deviceId) {
-    throw new Error("deviceId is required.");
+    throw new DeviceRegistrationError("deviceId is required.", 400);
   }
 
   if (!label) {
-    throw new Error("label is required.");
+    throw new DeviceRegistrationError("label is required.", 400);
   }
 
   const existingDevice = await db.device.findUnique({
@@ -333,19 +346,19 @@ export async function registerDeviceIfMissing(input: {
   }
 
   const topics = buildDefaultDeviceTopics(deviceId);
-    const createData = {
-      deviceId,
-      label,
-      board,
-      status: "factory_registered",
-      mqttCommandTopic: topics.commandTopic,
-      mqttStatusTopic: topics.statusTopic,
-      brokerProfile: "hivemq-dev",
-      otaAutoUpdateEnabled: false,
-      otaAutoUpdateChannel: "stable",
-      credentialMode: "shared",
-      credentialStatus: "active",
-      mqttClientId: buildDeviceMqttClientId(deviceId),
+  const createData = {
+    deviceId,
+    label,
+    board,
+    status: "factory_registered",
+    mqttCommandTopic: topics.commandTopic,
+    mqttStatusTopic: topics.statusTopic,
+    brokerProfile: "hivemq-dev",
+    otaAutoUpdateEnabled: false,
+    otaAutoUpdateChannel: "stable",
+    credentialMode: "shared",
+    credentialStatus: "active",
+    mqttClientId: buildDeviceMqttClientId(deviceId),
   };
   const device = await db.device.create({
     data: createData as never,
@@ -361,6 +374,52 @@ export async function registerDeviceIfMissing(input: {
   });
 
   return mapDatabaseRegistrationState(device);
+}
+
+export async function deleteRegisteredDevice(
+  deviceIdInput: string,
+): Promise<DeviceRegistrationState> {
+  const db = getDb();
+
+  if (!isDatabaseConfigured() || !db) {
+    throw new DeviceRegistrationError(
+      "Device deletion requires the database-backed registry.",
+      503,
+    );
+  }
+
+  const deviceId = deviceIdInput.trim();
+
+  if (!deviceId) {
+    throw new DeviceRegistrationError("deviceId is required.", 400);
+  }
+
+  const existingDevice = await db.device.findUnique({
+    where: {
+      deviceId,
+    },
+    include: {
+      ownerProfile: {
+        select: {
+          id: true,
+          displayName: true,
+          email: true,
+        },
+      },
+    },
+  });
+
+  if (!existingDevice) {
+    throw new DeviceRegistrationError(`Unknown deviceId: ${deviceId}`, 404);
+  }
+
+  await db.device.delete({
+    where: {
+      deviceId,
+    },
+  });
+
+  return mapDatabaseRegistrationState(existingDevice);
 }
 
 export function describeClaimState(claimState: DeviceClaimState): string {

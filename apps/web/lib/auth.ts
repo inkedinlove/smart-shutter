@@ -3,7 +3,9 @@ import "server-only";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import type { Adapter } from "next-auth/adapters";
 import { getServerSession, type NextAuthOptions } from "next-auth";
+import AppleProvider from "next-auth/providers/apple";
 import CredentialsProvider from "next-auth/providers/credentials";
+import GoogleProvider from "next-auth/providers/google";
 
 import { getDb, isDatabaseConfigured } from "@/lib/db";
 import { verifyPassword } from "@/lib/passwords";
@@ -15,7 +17,7 @@ import {
   RateLimitError,
 } from "@/lib/rate-limit";
 import { isInternalTestMode } from "@/lib/runtime-mode";
-import { normalizeEmail } from "@/lib/user-accounts";
+import { normalizeEmail, syncOAuthUserAccount } from "@/lib/user-accounts";
 
 function getAdapter(): Adapter | undefined {
   const db = getDb();
@@ -43,41 +45,50 @@ function getAuthSecret(): string {
 
 const AUTH_SECRET = getAuthSecret();
 
-function buildAuthSignInRateLimitKey(input: {
-  email: string;
-  headers: Headers | Record<string, string | string[] | undefined> | undefined;
-}): string {
-  const normalizedEmail = normalizeEmail(input.email);
-  const requestIpAddress = getIpAddressFromHeaders(input.headers);
+function getConfiguredGoogleProvider() {
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
 
-  if (requestIpAddress && requestIpAddress !== "unknown" && normalizedEmail) {
-    return buildRateLimitKey("ip", requestIpAddress, "email", normalizedEmail);
+  if (!clientId || !clientSecret) {
+    return null;
   }
 
-  if (normalizedEmail) {
-    return buildRateLimitKey("email", normalizedEmail);
-  }
-
-  if (requestIpAddress && requestIpAddress !== "unknown") {
-    return buildRateLimitKey("ip", requestIpAddress);
-  }
-
-  return buildRateLimitKey("anonymous-sign-in");
+  return GoogleProvider({
+    clientId,
+    clientSecret,
+    allowDangerousEmailAccountLinking: true,
+  });
 }
 
-export const authOptions: NextAuthOptions = {
-  adapter: getAdapter(),
-  session: {
-    strategy: "jwt",
-    maxAge: 60 * 60 * 24 * 14,
-    updateAge: 60 * 60 * 8,
-  },
-  pages: {
-    signIn: "/login",
-  },
-  secret: AUTH_SECRET,
-  useSecureCookies: process.env.NODE_ENV === "production",
-  providers: [
+function getConfiguredAppleProvider() {
+  const clientId = process.env.APPLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.APPLE_CLIENT_SECRET?.trim();
+
+  if (!clientId || !clientSecret) {
+    return null;
+  }
+
+  return AppleProvider({
+    clientId,
+    clientSecret,
+    allowDangerousEmailAccountLinking: true,
+  });
+}
+
+function buildConfiguredProviders(): NextAuthOptions["providers"] {
+  const providers: NextAuthOptions["providers"] = [];
+  const googleProvider = getConfiguredGoogleProvider();
+  const appleProvider = getConfiguredAppleProvider();
+
+  if (googleProvider) {
+    providers.push(googleProvider);
+  }
+
+  if (appleProvider) {
+    providers.push(appleProvider);
+  }
+
+  providers.push(
     CredentialsProvider({
       name: "Email and Password",
       credentials: {
@@ -163,9 +174,127 @@ export const authOptions: NextAuthOptions = {
         };
       },
     }),
-  ],
+  );
+
+  return providers;
+}
+
+function getUserIdFromAuthPayload(input: {
+  tokenSub?: string | null;
+  userId?: string | null;
+}): string {
+  if (typeof input.userId === "string" && input.userId.trim()) {
+    return input.userId.trim();
+  }
+
+  if (typeof input.tokenSub === "string" && input.tokenSub.trim()) {
+    return input.tokenSub.trim();
+  }
+
+  return "";
+}
+
+function isOAuthSignIn(provider?: string | null): boolean {
+  return Boolean(provider && provider !== "credentials");
+}
+
+function buildAuthSignInRateLimitKey(input: {
+  email: string;
+  headers: Headers | Record<string, string | string[] | undefined> | undefined;
+}): string {
+  const normalizedEmail = normalizeEmail(input.email);
+  const requestIpAddress = getIpAddressFromHeaders(input.headers);
+
+  if (requestIpAddress && requestIpAddress !== "unknown" && normalizedEmail) {
+    return buildRateLimitKey("ip", requestIpAddress, "email", normalizedEmail);
+  }
+
+  if (normalizedEmail) {
+    return buildRateLimitKey("email", normalizedEmail);
+  }
+
+  if (requestIpAddress && requestIpAddress !== "unknown") {
+    return buildRateLimitKey("ip", requestIpAddress);
+  }
+
+  return buildRateLimitKey("anonymous-sign-in");
+}
+
+export const authOptions: NextAuthOptions = {
+  adapter: getAdapter(),
+  session: {
+    strategy: "jwt",
+    maxAge: 60 * 60 * 24 * 14,
+    updateAge: 60 * 60 * 8,
+  },
+  pages: {
+    signIn: "/login",
+  },
+  secret: AUTH_SECRET,
+  useSecureCookies: process.env.NODE_ENV === "production",
+  providers: buildConfiguredProviders(),
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, account }) {
+      const db = getDb();
+      const userId = getUserIdFromAuthPayload({
+        userId: typeof user?.id === "string" ? user.id : null,
+        tokenSub: typeof token.sub === "string" ? token.sub : null,
+      });
+
+      if (
+        isDatabaseConfigured() &&
+        db &&
+        userId &&
+        isOAuthSignIn(account?.provider)
+      ) {
+        await syncOAuthUserAccount({
+          userId,
+          email:
+            typeof user?.email === "string"
+              ? user.email
+              : typeof token.email === "string"
+                ? token.email
+                : null,
+          displayName:
+            typeof user?.name === "string"
+              ? user.name
+              : typeof token.name === "string"
+                ? token.name
+                : null,
+        });
+      }
+
+      if (
+        isDatabaseConfigured() &&
+        db &&
+        userId &&
+        (Boolean(user) ||
+          typeof token.role !== "string" ||
+          typeof token.profileId !== "string")
+      ) {
+        const dbUser = await db.user.findUnique({
+          where: {
+            id: userId,
+          },
+          include: {
+            profile: true,
+          },
+        });
+
+        if (dbUser) {
+          token.role = dbUser.role;
+          token.profileId = dbUser.profile?.id ?? null;
+          token.name =
+            token.name ??
+            dbUser.name ??
+            dbUser.profile?.displayName ??
+            null;
+          token.email = token.email ?? dbUser.email ?? null;
+
+          return token;
+        }
+      }
+
       if (user) {
         token.role = typeof user.role === "string" ? user.role : "customer";
         token.profileId =

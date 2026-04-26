@@ -64,6 +64,27 @@ export function resolveRoleForEmail(email: string): UserRole {
   return getAdminEmails().has(normalizeEmail(email)) ? "admin" : "customer";
 }
 
+function resolveAccountDisplayName(input: {
+  displayName?: string | null;
+  email?: string | null;
+}): string {
+  const displayName =
+    typeof input.displayName === "string" ? input.displayName.trim() : "";
+
+  if (displayName) {
+    return displayName;
+  }
+
+  const email =
+    typeof input.email === "string" ? normalizeEmail(input.email) : "";
+
+  if (email) {
+    return email.split("@")[0] || "Smart Shutter User";
+  }
+
+  return "Smart Shutter User";
+}
+
 function mapProfile(profile: DatabaseUserProfile): UserProfileRecord {
   return {
     profileId: profile.id,
@@ -210,6 +231,174 @@ export async function createUserAccount(input: {
       error.code === "P2002"
     ) {
       throw new UserAccountError(conflictMessage, 409);
+    }
+
+    throw error;
+  }
+}
+
+export async function syncOAuthUserAccount(input: {
+  userId: string;
+  email?: string | null;
+  displayName?: string | null;
+}): Promise<RegisteredUserAccount> {
+  const db = getAccountsDb();
+  const userId = input.userId.trim();
+
+  if (!userId) {
+    throw new UserAccountError("User ID is required.", 400);
+  }
+
+  const normalizedEmail = input.email ? normalizeEmail(input.email) : "";
+  const email = normalizedEmail || null;
+
+  try {
+    return await db.$transaction(async (tx) => {
+      const existingUser = await tx.user.findUnique({
+        where: {
+          id: userId,
+        },
+        include: {
+          profile: true,
+        },
+      });
+
+      if (!existingUser) {
+        throw new UserAccountError("Unable to find the signed-in user.", 404);
+      }
+
+      const role = email
+        ? resolveRoleForEmail(email)
+        : existingUser.role === "admin"
+          ? "admin"
+          : "customer";
+      const displayName = resolveAccountDisplayName({
+        displayName: input.displayName ?? existingUser.name,
+        email: email ?? existingUser.email,
+      });
+      const userUpdateData: Prisma.UserUpdateInput = {};
+
+      if ((!existingUser.name || !existingUser.name.trim()) && displayName) {
+        userUpdateData.name = displayName;
+      }
+
+      if (email && !existingUser.email) {
+        userUpdateData.email = email;
+      }
+
+      if (existingUser.role !== role) {
+        userUpdateData.role = role;
+      }
+
+      const user =
+        Object.keys(userUpdateData).length > 0
+          ? await tx.user.update({
+              where: {
+                id: userId,
+              },
+              data: userUpdateData,
+              include: {
+                profile: true,
+              },
+            })
+          : existingUser;
+
+      let profile = user.profile;
+
+      if (profile) {
+        const profileUpdateData: Prisma.UserProfileUpdateInput = {};
+
+        if ((!profile.displayName || !profile.displayName.trim()) && displayName) {
+          profileUpdateData.displayName = displayName;
+        }
+
+        if (email && !profile.email) {
+          profileUpdateData.email = email;
+        }
+
+        if (Object.keys(profileUpdateData).length > 0) {
+          profile = await tx.userProfile.update({
+            where: {
+              id: profile.id,
+            },
+            data: profileUpdateData,
+          });
+        }
+      } else {
+        const existingProfile = email
+          ? await tx.userProfile.findUnique({
+              where: {
+                email,
+              },
+            })
+          : null;
+
+        if (existingProfile?.userId && existingProfile.userId !== user.id) {
+          throw new UserAccountError(
+            "Another customer profile already uses this email address.",
+            409,
+          );
+        }
+
+        if (existingProfile) {
+          const profileUpdateData: Prisma.UserProfileUpdateInput = {
+            user: {
+              connect: {
+                id: user.id,
+              },
+            },
+          };
+
+          if (
+            (!existingProfile.displayName ||
+              !existingProfile.displayName.trim()) &&
+            displayName
+          ) {
+            profileUpdateData.displayName = displayName;
+          }
+
+          if (email && !existingProfile.email) {
+            profileUpdateData.email = email;
+          }
+
+          profile = await tx.userProfile.update({
+            where: {
+              id: existingProfile.id,
+            },
+            data: profileUpdateData,
+          });
+        } else {
+          profile = await tx.userProfile.create({
+            data: {
+              displayName,
+              email,
+              user: {
+                connect: {
+                  id: user.id,
+                },
+              },
+            },
+          });
+        }
+      }
+
+      return {
+        userId: user.id,
+        profileId: profile.id,
+        displayName: profile.displayName,
+        email: email ?? user.email ?? profile.email ?? "",
+        role,
+      };
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new UserAccountError(
+        "We couldn't link that sign-in to a customer profile.",
+        409,
+      );
     }
 
     throw error;

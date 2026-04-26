@@ -1,10 +1,15 @@
 "use client";
 
-import { signIn } from "next-auth/react";
+import {
+  getProviders,
+  signIn,
+  type ClientSafeProvider,
+} from "next-auth/react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Suspense,
+  useEffect,
   startTransition,
   useMemo,
   useState,
@@ -33,6 +38,56 @@ function normalizeSignInErrorMessage(errorValue: string): string {
     return decodeURIComponent(rawMessage);
   } catch {
     return rawMessage;
+  }
+}
+
+type OAuthProviderId = "google" | "apple";
+
+const OAUTH_PROVIDER_ORDER: OAuthProviderId[] = ["google", "apple"];
+
+function normalizeAuthProviderErrorMessage(errorValue: string | null): string | null {
+  if (!errorValue) {
+    return null;
+  }
+
+  const rawMessage = errorValue.trim();
+
+  if (!rawMessage) {
+    return null;
+  }
+
+  switch (rawMessage) {
+    case "OAuthAccountNotLinked":
+      return "This email is already linked to a different sign-in method. Try the method you used first.";
+    case "AccessDenied":
+      return "We couldn't complete that provider sign-in request.";
+    case "Callback":
+    case "OAuthCallback":
+      return "The provider sign-in callback did not complete successfully.";
+    case "Configuration":
+      return "This sign-in provider is not fully configured yet.";
+    default:
+      return normalizeSignInErrorMessage(rawMessage);
+  }
+}
+
+function isSupportedOAuthProvider(
+  provider: ClientSafeProvider,
+): provider is ClientSafeProvider & { id: OAuthProviderId } {
+  return (
+    provider.type === "oauth" &&
+    (provider.id === "google" || provider.id === "apple")
+  );
+}
+
+function getOAuthProviderButtonLabel(providerId: OAuthProviderId): string {
+  switch (providerId) {
+    case "google":
+      return "Continue with Google";
+    case "apple":
+      return "Continue with Apple";
+    default:
+      return "Continue";
   }
 }
 
@@ -66,6 +121,11 @@ function LoginContent() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingOAuthProviderId, setPendingOAuthProviderId] =
+    useState<OAuthProviderId | null>(null);
+  const [oauthProviders, setOauthProviders] = useState<
+    Array<ClientSafeProvider & { id: OAuthProviderId }>
+  >([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [nextActionMessage, setNextActionMessage] = useState<string | null>(null);
 
@@ -74,6 +134,58 @@ function LoginContent() {
     [searchParams],
   );
   const expiredReason = searchParams.get("reason") === "session-expired";
+  const providerErrorMessage = useMemo(
+    () => normalizeAuthProviderErrorMessage(searchParams.get("error")),
+    [searchParams],
+  );
+  const activeErrorMessage = errorMessage ?? providerErrorMessage;
+  const activeNextActionMessage =
+    errorMessage != null
+      ? nextActionMessage
+      : providerErrorMessage
+        ? "Try again, or use a different sign-in option if you already have one set up."
+        : null;
+  const isBusy = isSubmitting || pendingOAuthProviderId !== null;
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadProviders() {
+      try {
+        const providers = await getProviders();
+
+        if (isCancelled || !providers) {
+          return;
+        }
+
+        const nextProviders = Object.values(providers)
+          .filter(isSupportedOAuthProvider)
+          .sort(
+            (left, right) =>
+              OAUTH_PROVIDER_ORDER.indexOf(left.id) -
+              OAUTH_PROVIDER_ORDER.indexOf(right.id),
+          );
+
+        startTransition(() => {
+          setOauthProviders(nextProviders);
+        });
+      } catch {
+        if (isCancelled) {
+          return;
+        }
+
+        startTransition(() => {
+          setOauthProviders([]);
+        });
+      }
+    }
+
+    void loadProviders();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   async function handleSignIn() {
     const result = await signIn("credentials", {
@@ -114,6 +226,37 @@ function LoginContent() {
       "Unable to create your account.",
     );
     await handleSignIn();
+  }
+
+  async function handleOAuthSignIn(providerId: OAuthProviderId) {
+    setPendingOAuthProviderId(providerId);
+    setErrorMessage(null);
+    setNextActionMessage(null);
+
+    try {
+      const result = await signIn(providerId, {
+        callbackUrl,
+      });
+
+      if (result?.error) {
+        throw new Error(
+          normalizeAuthProviderErrorMessage(result.error) ??
+            "Unable to continue with that provider right now.",
+        );
+      }
+    } catch (error) {
+      startTransition(() => {
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : "Unable to continue with that provider right now.",
+        );
+        setNextActionMessage(
+          "Try again in a moment, or use another sign-in option while we sort that out.",
+        );
+      });
+      setPendingOAuthProviderId(null);
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -220,6 +363,33 @@ function LoginContent() {
             </button>
           </div>
 
+          {oauthProviders.length > 0 ? (
+            <div className="mt-6 space-y-3">
+              {oauthProviders.map((provider) => (
+                <button
+                  key={provider.id}
+                  className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-4 text-base font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isBusy}
+                  type="button"
+                  onClick={() => {
+                    void handleOAuthSignIn(provider.id);
+                  }}
+                >
+                  {pendingOAuthProviderId === provider.id
+                    ? `Connecting ${provider.name}...`
+                    : getOAuthProviderButtonLabel(provider.id)}
+                </button>
+              ))}
+
+              <div className="relative py-2 text-center">
+                <div className="absolute inset-x-0 top-1/2 border-t border-white/10" />
+                <span className="relative bg-[var(--dashboard-bg)] px-3 text-xs uppercase tracking-[0.24em] text-slate-500">
+                  Or use email
+                </span>
+              </div>
+            </div>
+          ) : null}
+
           <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
             {mode === "register" ? (
               <label className="block">
@@ -270,7 +440,7 @@ function LoginContent() {
 
             <button
               className="w-full rounded-xl bg-cyan-400 px-4 py-4 text-base font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-cyan-400/50"
-              disabled={isSubmitting}
+              disabled={isBusy}
               type="submit"
             >
               {isSubmitting
@@ -283,16 +453,18 @@ function LoginContent() {
             </button>
           </form>
 
-          {errorMessage ? (
+          {activeErrorMessage ? (
             <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
-              <div className="font-semibold text-amber-50">{errorMessage}</div>
-              {nextActionMessage ? (
-                <div className="mt-1 text-amber-100/90">{nextActionMessage}</div>
+              <div className="font-semibold text-amber-50">{activeErrorMessage}</div>
+              {activeNextActionMessage ? (
+                <div className="mt-1 text-amber-100/90">
+                  {activeNextActionMessage}
+                </div>
               ) : null}
             </div>
           ) : null}
 
-          {expiredReason && !errorMessage ? (
+          {expiredReason && !activeErrorMessage ? (
             <div className="mt-4 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">
               <div className="font-semibold text-white">Please sign in again.</div>
               <div className="mt-1">

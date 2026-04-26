@@ -6,7 +6,10 @@ import {
   getRequestIpAddress,
   RateLimitError,
 } from "@/lib/rate-limit";
-import { registerDeviceIfMissing } from "@/lib/device-registration";
+import {
+  DeviceRegistrationError,
+  registerDeviceIfMissing,
+} from "@/lib/device-registration";
 
 type RegisterDeviceBody = {
   deviceId?: unknown;
@@ -70,6 +73,10 @@ export async function POST(request: Request) {
           "Retry-After": String(error.retryAfterSeconds),
         },
       });
+    }
+
+    if (error instanceof DeviceRegistrationError) {
+      return apiError(error.message, error.statusCode);
     }
 
     if (error instanceof Error) {

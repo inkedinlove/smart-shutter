@@ -69,6 +69,22 @@ function isRegisterResponse(
   return isRecord(value) && isAdminDeviceRecord(value.device);
 }
 
+function buildDeleteConfirmationMessage(device: AdminDeviceRecord): string {
+  const subject = device.label?.trim() || device.deviceId;
+  const ownershipLine =
+    device.claimState === "claimed"
+      ? "This device is currently claimed and will be removed from its owner account."
+      : "This device is not currently claimed.";
+
+  return [
+    `Delete ${subject}?`,
+    "",
+    ownershipLine,
+    "This removes the device record, claim history, firmware update history, and command audit history.",
+    "The hardware can be re-registered later, but it will disappear from the app until then.",
+  ].join("\n");
+}
+
 function getClaimStateClasses(claimState: DeviceClaimState): string {
   switch (claimState) {
     case "claimed":
@@ -123,6 +139,9 @@ export default function AdminDevicesPage() {
   const [board, setBoard] = useState("esp32");
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingDeleteDeviceId, setPendingDeleteDeviceId] = useState<
+    string | null
+  >(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const claimedCount = devices.filter(
@@ -232,6 +251,58 @@ export default function AdminDevicesPage() {
       });
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleDeleteDevice(device: AdminDeviceRecord) {
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(buildDeleteConfirmationMessage(device));
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setPendingDeleteDeviceId(device.deviceId);
+    setErrorMessage(null);
+    setActionMessage(null);
+
+    try {
+      const response = await fetchWithShortTimeout(
+        `/api/admin/devices/${encodeURIComponent(device.deviceId)}`,
+        {
+          method: "DELETE",
+          timeoutMessage: "Deleting the device timed out.",
+        },
+      );
+      const payload = await readApiData(
+        response,
+        isRegisterResponse,
+        "Unable to delete the device.",
+      );
+
+      startTransition(() => {
+        setDevices((current) =>
+          current.filter(
+            (currentDevice) =>
+              currentDevice.deviceId !== payload.device.deviceId,
+          ),
+        );
+        setActionMessage(`Deleted ${payload.device.deviceId}.`);
+      });
+    } catch (error) {
+      if (error instanceof SessionRequiredError) {
+        redirectToLogin("/admin/devices");
+        return;
+      }
+
+      startTransition(() => {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Unable to delete the device.",
+        );
+      });
+    } finally {
+      setPendingDeleteDeviceId(null);
     }
   }
 
@@ -387,6 +458,18 @@ export default function AdminDevicesPage() {
                         disabled
                       >
                         Credential management next
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex items-center justify-center rounded-xl border border-rose-400/30 bg-rose-400/12 px-4 py-3 text-sm font-semibold text-rose-100 transition hover:bg-rose-400/18 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={pendingDeleteDeviceId === device.deviceId}
+                        onClick={() => {
+                          void handleDeleteDevice(device);
+                        }}
+                      >
+                        {pendingDeleteDeviceId === device.deviceId
+                          ? "Deleting..."
+                          : "Delete device"}
                       </button>
                     </div>
                   </div>
