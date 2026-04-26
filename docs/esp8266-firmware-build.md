@@ -53,6 +53,11 @@ Recommended CLI FQBN for NodeMCU-style boards:
 esp8266:esp8266:nodemcuv2
 ```
 
+Other common ESP8266 CLI FQBNs:
+
+- `esp8266:esp8266:d1_mini` for LOLIN or WEMOS D1 mini boards
+- `esp8266:esp8266:generic` for unknown clones that need the generic profile
+
 ## Required Libraries
 
 Install these libraries:
@@ -97,28 +102,46 @@ The default ESP8266 sketch uses NodeMCU-friendly GPIOs:
 Avoid changing to ESP8266 boot-strap pins unless you know the board wiring
 requirements.
 
+## Windows COM Port Flow
+
+1. Use a known-good USB data cable.
+2. Open Windows Device Manager.
+3. Unplug and replug the ESP8266 board.
+4. Watch `Ports (COM & LPT)` and note the new port such as `COM7`.
+5. If no port appears, try a different cable or install the USB serial driver used by the board, often `CP210x` or `CH340`.
+6. Close Serial Monitor or any other app using that COM port before upload.
+
 ## Compile With Arduino CLI
+
+Run these commands from the Smart Shutter repo root.
+
+Working repo helper command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2 -SketchDir .\firmware\esp8266-shutter -OutputDir .\.arduino-build\firmware\esp8266-shutter
+```
 
 Direct compile:
 
 ```powershell
-arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 --output-dir .arduino-build/firmware/esp8266-shutter firmware/esp8266-shutter
+arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 --output-dir .\.arduino-build\firmware\esp8266-shutter .\firmware\esp8266-shutter
 ```
 
-Repo helper:
+Optional compile and upload example:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2 -SketchDir firmware/esp8266-shutter -OutputDir .arduino-build/firmware/esp8266-shutter
+arduino-cli compile --upload -p COM7 --fqbn esp8266:esp8266:nodemcuv2 .\firmware\esp8266-shutter
 ```
 
 ## Flash With Arduino IDE
 
-1. Select the ESP8266 board.
-2. Select the serial port.
+1. Select the ESP8266 board profile that matches the hardware.
+2. Select the serial port you found in Device Manager.
 3. Open `firmware/esp8266-shutter/esp8266-shutter.ino`.
 4. Click `Verify`.
 5. Click `Upload`.
-6. Open Serial Monitor at `115200`.
+6. If upload stalls on a clone board, hold `BOOT` or `FLASH` while upload begins.
+7. Open Serial Monitor at `115200`.
 
 ## Expected Boot Logs
 
