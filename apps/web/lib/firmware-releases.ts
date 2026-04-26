@@ -50,6 +50,13 @@ function getFirmwareChannel(): string {
   return process.env.FIRMWARE_UPDATE_CHANNEL?.trim() || DEFAULT_FIRMWARE_CHANNEL;
 }
 
+function getResolvedDeviceFirmwareChannel(
+  device: Pick<RegisteredDevice, "otaAutoUpdateChannel">,
+): string {
+  const normalizedChannel = device.otaAutoUpdateChannel?.trim();
+  return normalizedChannel || getFirmwareChannel();
+}
+
 function mapReleaseRecord(
   release: Pick<
     PrismaFirmwareRelease,
@@ -252,7 +259,7 @@ export async function createFirmwareCheckResponse(
     currentVersion?: string | null;
   },
 ): Promise<FirmwareCheckResponse> {
-  const channel = getFirmwareChannel();
+  const channel = getResolvedDeviceFirmwareChannel(device);
   const deviceBoard = device.board ?? DEFAULT_FIRMWARE_BOARD;
   const latestRelease = await getLatestFirmwareRelease(channel, deviceBoard);
   const currentVersion = options?.currentVersion ?? device.firmwareVersion ?? null;
@@ -264,6 +271,8 @@ export async function createFirmwareCheckResponse(
     updateAvailable: latestRelease !== null && currentVersion !== latestRelease.version,
     board: latestRelease?.board ?? deviceBoard,
     channel,
+    autoUpdateEnabled: device.otaAutoUpdateEnabled,
+    autoUpdateChannel: channel,
     releaseNotes: latestRelease?.notes ?? null,
     artifactUrl:
       latestRelease && isSafeArtifactUrl(latestRelease.artifactUrl)
@@ -280,7 +289,7 @@ export async function createFirmwareManifestResponse(
     currentVersion?: string | null;
   },
 ): Promise<FirmwareManifestResponse> {
-  const channel = getFirmwareChannel();
+  const channel = getResolvedDeviceFirmwareChannel(device);
   const deviceBoard = device.board ?? DEFAULT_FIRMWARE_BOARD;
   const latestRelease = await getLatestFirmwareRelease(channel, deviceBoard);
   const currentVersion = options?.currentVersion ?? device.firmwareVersion ?? null;
@@ -294,6 +303,8 @@ export async function createFirmwareManifestResponse(
     latestVersion: latestRelease?.version ?? null,
     board: latestRelease?.board ?? deviceBoard,
     channel,
+    autoUpdateEnabled: device.otaAutoUpdateEnabled,
+    autoUpdateChannel: channel,
     artifactUrl:
       updateAvailable &&
       latestRelease &&

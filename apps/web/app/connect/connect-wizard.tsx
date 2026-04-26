@@ -995,13 +995,13 @@ export default function ConnectWizard() {
     if (!calibrationComplete) {
       return {
         title: "Safe calibration still needed",
-        body: "Keep using small movements until direction is confirmed and both ends are marked.",
+        body: "Keep using guided movements until direction is confirmed and both true end positions are marked.",
       };
     }
 
     return {
         title: "Setup looks good",
-        body: "The device is online and calibration is complete.",
+        body: "The device is online and the saved endpoints now define the full 0-100 range.",
       };
   }, [calibrationComplete, selectedDeviceStatus]);
 
@@ -1037,27 +1037,27 @@ export default function ConnectWizard() {
           eyebrow: "Step 2",
           title: "Check direction",
           body: "Press Nudge Open once and watch closely.",
-          helper: `Movement is limited to ${allowedMaxPercentStep}% while setup is active.`,
+          helper: `Each setup move is capped at ${allowedMaxPercentStep}%, but calibration can keep jogging past the current 0-100 estimate until you save the real endpoints.`,
         };
       case "closed":
         return {
           eyebrow: "Step 3",
           title: "Set closed",
-          body: "Use small nudges until the shutter is fully closed, then save this position.",
-          helper: "Use Nudge Close for the main movement and Open for small corrections.",
+          body: "Use nudges until the shutter is truly closed, then save this exact endpoint.",
+          helper: "This saved point becomes the new 0% reference. Use Open only for small corrections.",
         };
       case "open":
         return {
           eyebrow: "Step 4",
           title: "Set open",
-          body: "Use small nudges until the shutter is fully open, then save this position.",
-          helper: "Stop immediately if the shutter binds, clicks, buzzes, or strains.",
+          body: "Use nudges until the shutter is truly open, then save this exact endpoint.",
+          helper: "This saved point becomes the new 100% reference. Stop immediately if the shutter binds, clicks, buzzes, or strains.",
         };
       case "finish":
         return {
           eyebrow: "Step 5",
           title: "Finish",
-          body: "Both ends are marked. Save the calibration to unlock normal movement.",
+          body: "Both endpoints are marked. Save calibration to remap the full 0-100 range across this travel.",
           helper: "After this step, setup is ready to continue.",
         };
       default:

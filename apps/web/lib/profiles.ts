@@ -72,6 +72,8 @@ function mapOwnedDevice(device: DatabaseDeviceWithOwner): RegisteredDevice {
     commandTopic: device.mqttCommandTopic,
     statusTopic: device.mqttStatusTopic,
     brokerProfile: device.brokerProfile as RegisteredDevice["brokerProfile"],
+    otaAutoUpdateEnabled: device.otaAutoUpdateEnabled,
+    otaAutoUpdateChannel: device.otaAutoUpdateChannel,
     ownerProfileId: device.ownerProfileId,
     ownerProfile: device.ownerProfile
       ? {

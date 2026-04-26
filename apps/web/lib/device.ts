@@ -135,6 +135,8 @@ export type DeviceStatus = {
   wifiConnected?: boolean;
   mqttConnected?: boolean;
   otaEnabled?: boolean;
+  otaAutoUpdateEnabled?: boolean;
+  otaAutoUpdateChannel?: string;
   otaState?: OtaState;
   otaLastError?: string;
   otaTargetVersion?: string;
@@ -320,6 +322,8 @@ export function createDefaultDeviceStatus(
     wifiConnected: overrides?.wifiConnected,
     mqttConnected: overrides?.mqttConnected,
     otaEnabled: undefined,
+    otaAutoUpdateEnabled: undefined,
+    otaAutoUpdateChannel: undefined,
     otaState: undefined,
     otaLastError: undefined,
     otaTargetVersion: undefined,

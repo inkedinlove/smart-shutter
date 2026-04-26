@@ -1,5 +1,6 @@
-import { AccessControlError, getAuthorizedDevice } from "@/lib/access-control";
 import { apiError, apiOk } from "@/lib/api-response";
+import { AccessControlError } from "@/lib/access-control";
+import { getAuthorizedFirmwareRouteDevice } from "@/lib/device-firmware-auth";
 import { recordDeviceUpdateEvent } from "@/lib/firmware-releases";
 import { isDeviceUpdateEventStatus } from "@/lib/firmware";
 
@@ -25,7 +26,7 @@ export async function POST(request: Request, context: RouteContext) {
   let device;
 
   try {
-    ({ device } = await getAuthorizedDevice(deviceId));
+    ({ device } = await getAuthorizedFirmwareRouteDevice(request, deviceId));
   } catch (error) {
     if (error instanceof AccessControlError) {
       return apiError(error.message, error.statusCode);

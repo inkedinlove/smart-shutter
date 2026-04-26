@@ -127,6 +127,7 @@ function buildEsp8266Config(input: ProvisionedConfigInput): string {
     motorAcceleration: 220.0,
     safeMotorMaxSpeed: 180.0,
     safeMotorAcceleration: 90.0,
+    otaEnabled: false,
   });
 }
 
@@ -143,6 +144,7 @@ function buildEsp8266D1D4Config(input: ProvisionedConfigInput): string {
     motorAcceleration: 140.0,
     safeMotorMaxSpeed: 140.0,
     safeMotorAcceleration: 70.0,
+    otaEnabled: true,
   });
 }
 
@@ -159,6 +161,7 @@ function buildEsp8266StepperConfig(
     motorAcceleration: number;
     safeMotorMaxSpeed: number;
     safeMotorAcceleration: number;
+    otaEnabled: boolean;
   },
 ): string {
   const wifiSsid = input.wifiMode === "preconfigured" ? input.wifiSsid : "";
@@ -200,9 +203,12 @@ constexpr const char* STATUS_TOPIC = ${toCString(input.statusTopic)};
 // OTA Update Settings
 // ---------------------------------------------------------------------------
 
-#define ENABLE_OTA_UPDATES false
+#define ENABLE_OTA_UPDATES ${pinout.otaEnabled ? "true" : "false"}
 #define API_BASE_URL ${toCString(input.publicAppBaseUrl)}
 #define OTA_MANIFEST_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/manifest"
+#define OTA_EVENTS_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/events"
+#define OTA_AUTO_CHECK_INITIAL_DELAY_MS 300000UL
+#define OTA_AUTO_CHECK_INTERVAL_MS 3600000UL
 
 // ---------------------------------------------------------------------------
 // Optional Behavior Flags

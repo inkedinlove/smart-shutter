@@ -1,10 +1,13 @@
 #include <AccelStepper.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
+#include <ESP8266HTTPClient.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
+#include <Updater.h>
 #include <WiFiClientSecureBearSSL.h>
+#include <bearssl/bearssl_hash.h>
 
 #if defined(__has_include)
 #if __has_include("config.h")
@@ -22,6 +25,26 @@
 
 #ifndef ENABLE_OTA_UPDATES
 #define ENABLE_OTA_UPDATES false
+#endif
+
+#ifndef API_BASE_URL
+#define API_BASE_URL ""
+#endif
+
+#ifndef OTA_MANIFEST_PATH_TEMPLATE
+#define OTA_MANIFEST_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/manifest"
+#endif
+
+#ifndef OTA_EVENTS_PATH_TEMPLATE
+#define OTA_EVENTS_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/events"
+#endif
+
+#ifndef OTA_AUTO_CHECK_INITIAL_DELAY_MS
+#define OTA_AUTO_CHECK_INITIAL_DELAY_MS 300000UL
+#endif
+
+#ifndef OTA_AUTO_CHECK_INTERVAL_MS
+#define OTA_AUTO_CHECK_INTERVAL_MS 3600000UL
 #endif
 
 #ifndef SAFE_SETUP_MODE
@@ -82,13 +105,43 @@ enum OtaState {
   OTA_STATE_SUCCESS_PENDING_REBOOT,
 };
 
+struct OtaManifest {
+  bool updateAvailable = false;
+  String currentVersion;
+  String latestVersion;
+  String board;
+  String channel;
+  bool autoUpdateEnabled = false;
+  String autoUpdateChannel;
+  String artifactUrl;
+  String sha256;
+  long sizeBytes = -1;
+};
+
+struct OtaDownloadResult {
+  String computedSha256;
+  size_t downloadedBytes = 0;
+};
+
 struct StoredWiFiCredentials {
   uint32_t magic;
   char ssid[64];
   char password[64];
 };
 
+struct StoredDeviceSettings {
+  uint32_t magic;
+  char ssid[64];
+  char password[64];
+  int32_t closedPositionSteps;
+  int32_t openPositionSteps;
+  uint8_t calibrationComplete;
+  uint8_t reserved[3];
+};
+
 constexpr uint32_t STORED_WIFI_MAGIC = 0x53535431;
+constexpr uint32_t STORED_DEVICE_SETTINGS_MAGIC = 0x53535432;
+constexpr long MIN_CALIBRATION_SPAN_STEPS = 64L;
 
 BearSSL::WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
@@ -103,6 +156,7 @@ unsigned long lastStatusPublishMs = 0;
 unsigned long lastStatusLogMs = 0;
 unsigned long lastWiFiRetryMs = 0;
 unsigned long lastMqttRetryMs = 0;
+unsigned long lastAutoUpdateCheckMs = 0;
 unsigned long wifiAttemptStartedMs = 0;
 unsigned long setupPortalStartedMs = 0;
 
@@ -114,6 +168,8 @@ bool lastMovingState = false;
 bool lastWiFiConnectedState = false;
 
 int targetPercent = 0;
+long calibratedClosedPositionSteps = 0;
+long calibratedOpenPositionSteps = TRAVEL_STEPS;
 
 String resolvedDeviceId = "";
 String resolvedMqttClientId = "";
@@ -125,10 +181,12 @@ String setupPortalSsid = "";
 String setupPortalMessage = "";
 String otaLastError = "";
 String otaTargetVersion = "";
+String otaAutoUpdateChannel = "stable";
 String lastCalibrationAction =
   SAFE_SETUP_MODE ? "SAFE_SETUP_MODE_ENABLED" : "";
 String movementLockedReason =
   SAFE_SETUP_MODE ? "Calibration required before larger movement." : "";
+bool otaAutoUpdateEnabled = false;
 
 const char* deviceModeToString(DeviceMode mode) {
   switch (mode) {
@@ -194,10 +252,47 @@ void setDeviceMode(DeviceMode nextMode) {
   Serial.println(deviceModeToString(deviceMode));
 }
 
+float clampUnitRatio(float value) {
+  if (value < 0.0f) {
+    return 0.0f;
+  }
+
+  if (value > 1.0f) {
+    return 1.0f;
+  }
+
+  return value;
+}
+
+long getCalibratedSpanSteps() {
+  long span = calibratedOpenPositionSteps - calibratedClosedPositionSteps;
+
+  if (span != 0) {
+    return span;
+  }
+
+  return INVERT_DIRECTION ? -TRAVEL_STEPS : TRAVEL_STEPS;
+}
+
+long getCalibrationTravelSpanMagnitude() {
+  const long spanMagnitude = labs(getCalibratedSpanSteps());
+  return spanMagnitude > 0 ? spanMagnitude : TRAVEL_STEPS;
+}
+
+long getOpenDirectionStepSign() {
+  return getCalibratedSpanSteps() >= 0 ? 1L : -1L;
+}
+
+bool hasMeaningfulCalibrationSpan() {
+  return labs(calibratedOpenPositionSteps - calibratedClosedPositionSteps) >=
+         MIN_CALIBRATION_SPAN_STEPS;
+}
+
 int stepsToPercent(long steps) {
-  const long clampedSteps = constrain(steps, 0L, TRAVEL_STEPS);
-  const float ratio =
-    static_cast<float>(clampedSteps) / static_cast<float>(TRAVEL_STEPS);
+  const long closedSteps = calibratedClosedPositionSteps;
+  const long spanSteps = getCalibratedSpanSteps();
+  const float ratio = clampUnitRatio(
+    static_cast<float>(steps - closedSteps) / static_cast<float>(spanSteps));
   const int effectivePercent = static_cast<int>(round(ratio * 100.0f));
   const int mappedPercent =
     INVERT_DIRECTION ? 100 - effectivePercent : effectivePercent;
@@ -211,7 +306,9 @@ long percentToSteps(int percent) {
     INVERT_DIRECTION ? 100 - clampedPercent : clampedPercent;
   const float ratio = static_cast<float>(effectivePercent) / 100.0f;
 
-  return lround(ratio * static_cast<float>(TRAVEL_STEPS));
+  return lround(
+    static_cast<float>(calibratedClosedPositionSteps) +
+    ratio * static_cast<float>(getCalibratedSpanSteps()));
 }
 
 bool isMoving() {
@@ -240,6 +337,15 @@ bool isSafetyModeActive() {
 
 int getAllowedMaxPercentStep() {
   return isCalibrationRestricted() ? SAFE_ALLOWED_MAX_PERCENT_STEP : 100;
+}
+
+long getCalibrationJogSteps(int amount) {
+  const long baseSpan = getCalibrationTravelSpanMagnitude();
+  const long jogSteps = lround(
+    static_cast<float>(baseSpan) *
+    (static_cast<float>(constrain(amount, 1, 100)) / 100.0f));
+
+  return max(1L, jogSteps);
 }
 
 void rememberCalibrationAction(const char* action) {
@@ -324,45 +430,100 @@ void copyStringToBuffer(const String& value, char* buffer, size_t size) {
   value.substring(0, size - 1).toCharArray(buffer, size);
 }
 
+void resetCalibrationRangeToDefaults() {
+  calibratedClosedPositionSteps = 0;
+  calibratedOpenPositionSteps = INVERT_DIRECTION ? -TRAVEL_STEPS : TRAVEL_STEPS;
+  calibrationComplete = !SAFE_SETUP_MODE;
+}
+
+bool savePersistedDeviceSettings(const String& ssid, const String& password) {
+  EEPROM.begin(sizeof(StoredDeviceSettings));
+
+  StoredDeviceSettings stored = {};
+  stored.magic = STORED_DEVICE_SETTINGS_MAGIC;
+  copyStringToBuffer(ssid, stored.ssid, sizeof(stored.ssid));
+  copyStringToBuffer(password, stored.password, sizeof(stored.password));
+  stored.closedPositionSteps = static_cast<int32_t>(calibratedClosedPositionSteps);
+  stored.openPositionSteps = static_cast<int32_t>(calibratedOpenPositionSteps);
+  stored.calibrationComplete = calibrationComplete ? 1 : 0;
+
+  EEPROM.put(0, stored);
+  return EEPROM.commit();
+}
+
 void loadStoredWiFiCredentials(String* ssid, String* password) {
   if (ssid == nullptr || password == nullptr) {
     return;
   }
 
-  EEPROM.begin(sizeof(StoredWiFiCredentials));
+  resetCalibrationRangeToDefaults();
+  EEPROM.begin(sizeof(StoredDeviceSettings));
 
-  StoredWiFiCredentials stored = {};
-  EEPROM.get(0, stored);
+  StoredDeviceSettings storedSettings = {};
+  EEPROM.get(0, storedSettings);
 
-  if (stored.magic != STORED_WIFI_MAGIC) {
+  if (storedSettings.magic == STORED_DEVICE_SETTINGS_MAGIC) {
+    storedSettings.ssid[sizeof(storedSettings.ssid) - 1] = '\0';
+    storedSettings.password[sizeof(storedSettings.password) - 1] = '\0';
+
+    *ssid = String(storedSettings.ssid);
+    *password = String(storedSettings.password);
+    calibratedClosedPositionSteps =
+      static_cast<long>(storedSettings.closedPositionSteps);
+    calibratedOpenPositionSteps =
+      static_cast<long>(storedSettings.openPositionSteps);
+    calibrationComplete =
+      SAFE_SETUP_MODE ? storedSettings.calibrationComplete == 1 : true;
+
+    if (!hasMeaningfulCalibrationSpan()) {
+      resetCalibrationRangeToDefaults();
+    }
+
+    return;
+  }
+
+  StoredWiFiCredentials legacyStored = {};
+  EEPROM.get(0, legacyStored);
+
+  if (legacyStored.magic != STORED_WIFI_MAGIC) {
     *ssid = "";
     *password = "";
     return;
   }
 
-  stored.ssid[sizeof(stored.ssid) - 1] = '\0';
-  stored.password[sizeof(stored.password) - 1] = '\0';
+  legacyStored.ssid[sizeof(legacyStored.ssid) - 1] = '\0';
+  legacyStored.password[sizeof(legacyStored.password) - 1] = '\0';
 
-  *ssid = String(stored.ssid);
-  *password = String(stored.password);
+  *ssid = String(legacyStored.ssid);
+  *password = String(legacyStored.password);
 }
 
 bool saveStoredWiFiCredentials(const String& ssid, const String& password) {
-  EEPROM.begin(sizeof(StoredWiFiCredentials));
-
-  StoredWiFiCredentials stored = {};
-  stored.magic = STORED_WIFI_MAGIC;
-  copyStringToBuffer(ssid, stored.ssid, sizeof(stored.ssid));
-  copyStringToBuffer(password, stored.password, sizeof(stored.password));
-
-  EEPROM.put(0, stored);
-  const bool committed = EEPROM.commit();
+  const bool committed = savePersistedDeviceSettings(ssid, password);
 
   if (committed) {
     Serial.print("WiFi credentials saved for SSID: ");
     Serial.println(ssid);
   } else {
     Serial.println("Failed to save WiFi credentials.");
+  }
+
+  return committed;
+}
+
+bool saveCalibrationSettings() {
+  const bool committed =
+    savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
+
+  if (committed) {
+    Serial.print("Calibration saved: closed=");
+    Serial.print(calibratedClosedPositionSteps);
+    Serial.print(" open=");
+    Serial.print(calibratedOpenPositionSteps);
+    Serial.print(" complete=");
+    Serial.println(calibrationComplete ? "true" : "false");
+  } else {
+    Serial.println("Failed to save calibration settings.");
   }
 
   return committed;
@@ -382,10 +543,36 @@ bool hasRuntimeWiFiCredentials() {
   return hasText(runtimeWifiSsid);
 }
 
+String normalizeSha256(const String& rawValue) {
+  String normalized = rawValue;
+  normalized.trim();
+  normalized.toLowerCase();
+  return normalized;
+}
+
+String bytesToHexString(const unsigned char* bytes, size_t length) {
+  static const char HEX_CHARS[] = "0123456789abcdef";
+
+  String result;
+  result.reserve(length * 2);
+
+  for (size_t index = 0; index < length; index++) {
+    const unsigned char value = bytes[index];
+    result += HEX_CHARS[(value >> 4) & 0x0F];
+    result += HEX_CHARS[value & 0x0F];
+  }
+
+  return result;
+}
+
+void publishStatus(bool forceLog = false);
+bool checkForUpdate(bool autoCheck);
+
 void setOtaState(
   OtaState nextState,
   const String& nextTargetVersion,
-  const String& nextLastError
+  const String& nextLastError,
+  bool publishNow = true
 ) {
   const bool changed =
     otaState != nextState ||
@@ -406,6 +593,79 @@ void setOtaState(
   Serial.print(otaTargetVersion.length() > 0 ? otaTargetVersion : "none");
   Serial.print(" error=");
   Serial.println(otaLastError.length() > 0 ? otaLastError : "none");
+
+  if (publishNow) {
+    publishStatus(true);
+  }
+}
+
+String buildApiUrl(const char* pathTemplate) {
+  String baseUrl = API_BASE_URL;
+  baseUrl.trim();
+
+  if (baseUrl.length() == 0) {
+    return "";
+  }
+
+  String path = pathTemplate;
+  path.replace("{deviceId}", resolvedDeviceId);
+
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+
+  while (baseUrl.endsWith("/")) {
+    baseUrl.remove(baseUrl.length() - 1);
+  }
+
+  if (!path.startsWith("/")) {
+    path = "/" + path;
+  }
+
+  return baseUrl + path;
+}
+
+bool beginHttpClient(
+  HTTPClient& http,
+  const String& url,
+  BearSSL::WiFiClientSecure& secureHttpClient,
+  WiFiClient& plainHttpClient
+) {
+  http.setTimeout(15000);
+
+  if (url.startsWith("https://")) {
+    // MVP only: this skips CA certificate validation. Replace with pinned CA
+    // validation before broader deployment.
+    secureHttpClient.setInsecure();
+    secureHttpClient.setTimeout(15000);
+    return http.begin(secureHttpClient, url);
+  }
+
+  if (url.startsWith("http://")) {
+    plainHttpClient.setTimeout(15000);
+    return http.begin(plainHttpClient, url);
+  }
+
+  Serial.println("OTA request uses an unsupported URL scheme.");
+  return false;
+}
+
+void addOtaAuthHeaders(HTTPClient& http) {
+  http.addHeader("X-Smart-Shutter-Device-Id", resolvedDeviceId);
+  http.addHeader("X-Smart-Shutter-Mqtt-Username", MQTT_USERNAME);
+  http.addHeader("X-Smart-Shutter-Mqtt-Password", MQTT_PASSWORD);
+}
+
+size_t getAvailableOtaSketchSpace() {
+  const size_t freeSketchSpace = ESP.getFreeSketchSpace();
+  return freeSketchSpace > 0x1000
+    ? ((freeSketchSpace - 0x1000) & 0xFFFFF000)
+    : freeSketchSpace;
+}
+
+void discardPendingOtaUpdate() {
+  Update.setMD5("00000000000000000000000000000000");
+  Update.end();
 }
 
 size_t buildStatusPayload(
@@ -444,6 +704,9 @@ size_t buildStatusPayload(
     statusDoc["rssi"] = nullptr;
   }
   statusDoc["otaEnabled"] = ENABLE_OTA_UPDATES;
+  statusDoc["otaAutoUpdateEnabled"] = otaAutoUpdateEnabled;
+  statusDoc["otaAutoUpdateChannel"] =
+    otaAutoUpdateChannel.length() > 0 ? otaAutoUpdateChannel : "stable";
   statusDoc["otaState"] = otaStateToString(otaState);
   if (otaLastError.length() > 0) {
     statusDoc["otaLastError"] = otaLastError;
@@ -498,7 +761,7 @@ void logStatusSummary(bool published, DeviceMode modeValue, bool movingValue) {
   Serial.println(otaStateToString(otaState));
 }
 
-void publishStatus(bool forceLog = false) {
+void publishStatus(bool forceLog) {
   if (!mqttClient.connected()) {
     return;
   }
@@ -810,12 +1073,12 @@ void handleNudgeCommand(bool opening, int requestedAmount, const char* source) {
   const int currentPercent = stepsToPercent(stepper.currentPosition());
   const int amount =
     constrain(requestedAmount, 1, getAllowedMaxPercentStep());
+  const int requestedDelta = amount;
   const int nextPercent = constrain(
     currentPercent + (opening ? amount : -amount),
     0,
     100
   );
-  const int requestedDelta = abs(nextPercent - currentPercent);
 
   if (!ensureSafeMovementAllowed(
         opening ? "NUDGE_OPEN" : "NUDGE_CLOSE",
@@ -828,7 +1091,17 @@ void handleNudgeCommand(bool opening, int requestedAmount, const char* source) {
   rememberCalibrationAction(opening ? "NUDGE_OPEN" : "NUDGE_CLOSE");
   syncMovementLockedReason();
 
-  const long targetSteps = percentToSteps(targetPercent);
+  long targetSteps = percentToSteps(targetPercent);
+
+  if (isCalibrationRestricted()) {
+    const long jogSteps = getCalibrationJogSteps(amount);
+    const long directionSign = getOpenDirectionStepSign();
+    targetSteps =
+      stepper.currentPosition() +
+      ((opening ? 1L : -1L) * directionSign * jogSteps);
+    targetPercent = stepsToPercent(targetSteps);
+  }
+
   Serial.print("Command received: type=");
   Serial.print(opening ? "NUDGE_OPEN" : "NUDGE_CLOSE");
   Serial.print(" amount=");
@@ -854,11 +1127,16 @@ void handleSetCurrentAsClosedCommand(const char* source) {
     return;
   }
 
-  stepper.setCurrentPosition(percentToSteps(0));
-  stepper.moveTo(percentToSteps(0));
+  const long directionSign = getOpenDirectionStepSign();
+  calibratedClosedPositionSteps = stepper.currentPosition();
+  calibratedOpenPositionSteps =
+    calibratedClosedPositionSteps +
+    (directionSign * getCalibrationTravelSpanMagnitude());
+  stepper.moveTo(calibratedClosedPositionSteps);
   targetPercent = 0;
   rememberCalibrationAction("SET_CURRENT_AS_CLOSED");
   syncMovementLockedReason();
+  saveCalibrationSettings();
 
   Serial.print("Command received: type=SET_CURRENT_AS_CLOSED source=");
   Serial.println(source);
@@ -872,11 +1150,21 @@ void handleSetCurrentAsOpenCommand(const char* source) {
     return;
   }
 
-  stepper.setCurrentPosition(percentToSteps(100));
-  stepper.moveTo(percentToSteps(100));
+  calibratedOpenPositionSteps = stepper.currentPosition();
+
+  if (!hasMeaningfulCalibrationSpan()) {
+    rejectMovementCommand(
+      "SET_CURRENT_AS_OPEN",
+      "Open position must be farther away from closed."
+    );
+    return;
+  }
+
+  stepper.moveTo(calibratedOpenPositionSteps);
   targetPercent = 100;
   rememberCalibrationAction("SET_CURRENT_AS_OPEN");
   syncMovementLockedReason();
+  saveCalibrationSettings();
 
   Serial.print("Command received: type=SET_CURRENT_AS_OPEN source=");
   Serial.println(source);
@@ -890,10 +1178,19 @@ void handleMarkCalibrationCompleteCommand(const char* source) {
     return;
   }
 
+  if (!hasMeaningfulCalibrationSpan()) {
+    rejectMovementCommand(
+      "MARK_CALIBRATION_COMPLETE",
+      "Set wider closed and open positions before finishing calibration."
+    );
+    return;
+  }
+
   calibrationComplete = true;
   rememberCalibrationAction("MARK_CALIBRATION_COMPLETE");
   applyMotionProfile();
   syncMovementLockedReason();
+  saveCalibrationSettings();
 
   Serial.print("Command received: type=MARK_CALIBRATION_COMPLETE source=");
   Serial.println(source);
@@ -939,16 +1236,537 @@ void handleStopCommand(const char* source) {
   publishStatus(true);
 }
 
+bool reportUpdateEvent(
+  const char* status,
+  const String& firmwareVersionFrom,
+  const String& firmwareVersionTo,
+  const String& detail
+) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("OTA event skipped: WiFi is not connected.");
+    return false;
+  }
+
+  const String url = buildApiUrl(OTA_EVENTS_PATH_TEMPLATE);
+  if (url.length() == 0) {
+    Serial.println("OTA event skipped: API_BASE_URL is not configured.");
+    return false;
+  }
+
+  BearSSL::WiFiClientSecure secureHttpClient;
+  WiFiClient plainHttpClient;
+  HTTPClient http;
+
+  Serial.print("OTA event -> ");
+  Serial.print(status);
+  Serial.print(" url=");
+  Serial.println(url);
+
+  if (!beginHttpClient(http, url, secureHttpClient, plainHttpClient)) {
+    Serial.println("OTA event failed: unable to start HTTP client.");
+    return false;
+  }
+
+  addOtaAuthHeaders(http);
+  http.addHeader("Content-Type", "application/json");
+
+  StaticJsonDocument<384> eventDoc;
+  eventDoc["status"] = status;
+  eventDoc["firmwareVersionFrom"] =
+    firmwareVersionFrom.length() > 0 ? firmwareVersionFrom : FIRMWARE_VERSION;
+  eventDoc["firmwareVersionTo"] =
+    firmwareVersionTo.length() > 0 ? firmwareVersionTo : FIRMWARE_VERSION;
+  eventDoc["detail"] = detail;
+
+  String requestBody;
+  serializeJson(eventDoc, requestBody);
+
+  const int responseCode = http.POST(requestBody);
+  http.end();
+
+  if (responseCode < 200 || responseCode >= 300) {
+    Serial.print("OTA event failed, response code=");
+    Serial.println(responseCode);
+    return false;
+  }
+
+  Serial.println("OTA event stored successfully.");
+  return true;
+}
+
+bool fetchOtaManifest(OtaManifest* manifest) {
+  if (manifest == nullptr) {
+    return false;
+  }
+
+  const String url = buildApiUrl(OTA_MANIFEST_PATH_TEMPLATE);
+  if (url.length() == 0) {
+    Serial.println("OTA manifest request skipped: API_BASE_URL is not configured.");
+    return false;
+  }
+
+  BearSSL::WiFiClientSecure secureHttpClient;
+  WiFiClient plainHttpClient;
+  HTTPClient http;
+
+  Serial.print("OTA step: request manifest -> ");
+  Serial.println(url);
+
+  if (!beginHttpClient(http, url, secureHttpClient, plainHttpClient)) {
+    Serial.println("OTA manifest request failed: unable to start HTTP client.");
+    return false;
+  }
+
+  addOtaAuthHeaders(http);
+  const int responseCode = http.GET();
+  if (responseCode != HTTP_CODE_OK) {
+    Serial.print("OTA manifest request failed, response code=");
+    Serial.println(responseCode);
+    http.end();
+    return false;
+  }
+
+  const String responseBody = http.getString();
+  http.end();
+
+  StaticJsonDocument<768> manifestDoc;
+  const DeserializationError error = deserializeJson(manifestDoc, responseBody);
+
+  if (error) {
+    Serial.print("OTA manifest parse failed: ");
+    Serial.println(error.c_str());
+    return false;
+  }
+
+  const char* manifestDeviceId = manifestDoc["deviceId"] | "";
+  if (
+    strlen(manifestDeviceId) == 0 ||
+    strcmp(manifestDeviceId, resolvedDeviceId.c_str()) != 0
+  ) {
+    Serial.println("OTA manifest rejected: deviceId mismatch.");
+    return false;
+  }
+
+  manifest->updateAvailable = manifestDoc["updateAvailable"] | false;
+  manifest->currentVersion = String(manifestDoc["currentVersion"] | "");
+  manifest->latestVersion = String(manifestDoc["latestVersion"] | "");
+  manifest->board = String(manifestDoc["board"] | "");
+  manifest->channel = String(manifestDoc["channel"] | "");
+  manifest->autoUpdateEnabled = manifestDoc["autoUpdateEnabled"] | false;
+  manifest->autoUpdateChannel = String(manifestDoc["autoUpdateChannel"] | "stable");
+  manifest->artifactUrl = String(manifestDoc["artifactUrl"] | "");
+  manifest->sha256 = normalizeSha256(String(manifestDoc["sha256"] | ""));
+
+  otaAutoUpdateEnabled = manifest->autoUpdateEnabled;
+  otaAutoUpdateChannel =
+    manifest->autoUpdateChannel.length() > 0
+      ? manifest->autoUpdateChannel
+      : "stable";
+
+  if (manifestDoc["sizeBytes"].is<long>()) {
+    manifest->sizeBytes = manifestDoc["sizeBytes"].as<long>();
+  } else if (manifestDoc["sizeBytes"].is<int>()) {
+    manifest->sizeBytes = manifestDoc["sizeBytes"].as<int>();
+  } else {
+    manifest->sizeBytes = -1;
+  }
+
+  Serial.print("OTA manifest updateAvailable=");
+  Serial.print(manifest->updateAvailable ? "true" : "false");
+  Serial.print(" latest=");
+  Serial.print(
+    manifest->latestVersion.length() > 0 ? manifest->latestVersion : "none");
+  Serial.print(" auto=");
+  Serial.print(manifest->autoUpdateEnabled ? "true" : "false");
+  Serial.print(" channel=");
+  Serial.print(
+    manifest->autoUpdateChannel.length() > 0
+      ? manifest->autoUpdateChannel
+      : "stable");
+  Serial.print(" board=");
+  Serial.println(manifest->board.length() > 0 ? manifest->board : "unknown");
+
+  return true;
+}
+
+bool verifySha256(const String& expectedSha256, const String& actualSha256) {
+  const String normalizedExpected = normalizeSha256(expectedSha256);
+  const String normalizedActual = normalizeSha256(actualSha256);
+
+  Serial.print("OTA step: verify sha256 expected=");
+  Serial.print(normalizedExpected);
+  Serial.print(" actual=");
+  Serial.println(normalizedActual);
+
+  return normalizedExpected.length() == 64 &&
+         normalizedExpected == normalizedActual;
+}
+
+bool downloadFirmware(
+  const OtaManifest& manifest,
+  OtaDownloadResult* downloadResult
+) {
+  if (downloadResult == nullptr) {
+    return false;
+  }
+
+  if (manifest.artifactUrl.length() == 0) {
+    Serial.println("OTA download skipped: artifactUrl is missing.");
+    return false;
+  }
+
+  BearSSL::WiFiClientSecure secureHttpClient;
+  WiFiClient plainHttpClient;
+  HTTPClient http;
+
+  Serial.print("OTA step: download firmware -> ");
+  Serial.println(manifest.artifactUrl);
+
+  if (!beginHttpClient(http, manifest.artifactUrl, secureHttpClient, plainHttpClient)) {
+    Serial.println("OTA download failed: unable to start HTTP client.");
+    return false;
+  }
+
+  const int responseCode = http.GET();
+  if (responseCode != HTTP_CODE_OK) {
+    Serial.print("OTA download failed, response code=");
+    Serial.println(responseCode);
+    http.end();
+    return false;
+  }
+
+  const int contentLength = http.getSize();
+  if (
+    manifest.sizeBytes > 0 &&
+    contentLength > 0 &&
+    manifest.sizeBytes != contentLength
+  ) {
+    Serial.print("OTA download rejected: manifest size ");
+    Serial.print(manifest.sizeBytes);
+    Serial.print(" does not match HTTP size ");
+    Serial.println(contentLength);
+    http.end();
+    return false;
+  }
+
+  const size_t updateSize =
+    manifest.sizeBytes > 0
+      ? static_cast<size_t>(manifest.sizeBytes)
+      : (contentLength > 0
+           ? static_cast<size_t>(contentLength)
+           : getAvailableOtaSketchSpace());
+
+  if (!Update.begin(updateSize)) {
+    Serial.print("OTA update begin failed, error=");
+    Serial.println(Update.getError());
+    http.end();
+    return false;
+  }
+
+  WiFiClient* stream = http.getStreamPtr();
+  unsigned char buffer[1024];
+  unsigned char digest[32];
+  br_sha256_context shaContext;
+  br_sha256_init(&shaContext);
+
+  size_t totalWritten = 0;
+  bool success = true;
+
+  while (http.connected() &&
+         (contentLength < 0 ||
+          totalWritten < static_cast<size_t>(contentLength))) {
+    const int availableBytes = stream->available();
+
+    if (availableBytes <= 0) {
+      delay(1);
+      continue;
+    }
+
+    const size_t bytesToRead =
+      availableBytes > static_cast<int>(sizeof(buffer))
+        ? sizeof(buffer)
+        : static_cast<size_t>(availableBytes);
+    const size_t bytesRead =
+      stream->readBytes(reinterpret_cast<char*>(buffer), bytesToRead);
+
+    if (bytesRead == 0) {
+      delay(1);
+      continue;
+    }
+
+    br_sha256_update(&shaContext, buffer, bytesRead);
+
+    const size_t writtenBytes = Update.write(buffer, bytesRead);
+    if (writtenBytes != bytesRead) {
+      Serial.print("OTA write failed after bytes=");
+      Serial.println(totalWritten);
+      success = false;
+      break;
+    }
+
+    totalWritten += writtenBytes;
+  }
+
+  br_sha256_out(&shaContext, digest);
+  http.end();
+
+  if (!success) {
+    Update.end(false);
+    return false;
+  }
+
+  if (
+    manifest.sizeBytes > 0 &&
+    totalWritten != static_cast<size_t>(manifest.sizeBytes)
+  ) {
+    Serial.print("OTA download size mismatch. Expected ");
+    Serial.print(manifest.sizeBytes);
+    Serial.print(" bytes, received ");
+    Serial.println(totalWritten);
+    Update.end(false);
+    return false;
+  }
+
+  if (contentLength > 0 && totalWritten != static_cast<size_t>(contentLength)) {
+    Serial.print("OTA HTTP stream ended early at bytes=");
+    Serial.println(totalWritten);
+    Update.end(false);
+    return false;
+  }
+
+  downloadResult->downloadedBytes = totalWritten;
+  downloadResult->computedSha256 = bytesToHexString(digest, sizeof(digest));
+
+  Serial.print("OTA download finished bytes=");
+  Serial.print(downloadResult->downloadedBytes);
+  Serial.print(" sha256=");
+  Serial.println(downloadResult->computedSha256);
+
+  return true;
+}
+
+bool installFirmware(
+  const OtaManifest& manifest,
+  const OtaDownloadResult& downloadResult
+) {
+  Serial.print("OTA step: install firmware version ");
+  Serial.print(manifest.latestVersion);
+  Serial.print(" bytes=");
+  Serial.println(downloadResult.downloadedBytes);
+
+  if (!Update.end()) {
+    Serial.print("OTA install failed, error=");
+    Serial.println(Update.getError());
+    return false;
+  }
+
+  if (!Update.isFinished()) {
+    Serial.println("OTA install failed: update did not finish cleanly.");
+    Update.end(false);
+    return false;
+  }
+
+  Serial.println("OTA install complete. Device will reboot into the new firmware.");
+  return true;
+}
+
+bool checkForUpdate(bool autoCheck) {
+  Serial.print("OTA step: checkForUpdate(");
+  Serial.print(autoCheck ? "auto" : "manual");
+  Serial.println(")");
+
+  if (!ENABLE_OTA_UPDATES) {
+    Serial.println("OTA is disabled in config.h.");
+    setOtaState(OTA_STATE_DISABLED, "", "OTA disabled");
+    reportUpdateEvent(
+      "update_blocked_ota_disabled",
+      FIRMWARE_VERSION,
+      FIRMWARE_VERSION,
+      "OTA disabled"
+    );
+    return false;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("OTA check failed: WiFi is not connected.");
+    setOtaState(OTA_STATE_FAILED, "", "WiFi not connected");
+    reportUpdateEvent(
+      "update_failed",
+      FIRMWARE_VERSION,
+      FIRMWARE_VERSION,
+      "WiFi not connected"
+    );
+    return false;
+  }
+
+  if (isMoving()) {
+    Serial.println("OTA check refused: motor is moving.");
+    setOtaState(OTA_STATE_FAILED, "", "Motor is moving");
+    reportUpdateEvent(
+      "update_blocked_motor_moving",
+      FIRMWARE_VERSION,
+      FIRMWARE_VERSION,
+      "Motor is moving"
+    );
+    return false;
+  }
+
+  setOtaState(OTA_STATE_CHECKING_MANIFEST, "", "");
+
+  OtaManifest manifest;
+  if (!fetchOtaManifest(&manifest)) {
+    setOtaState(OTA_STATE_FAILED, "", "Manifest request failed");
+    reportUpdateEvent(
+      "update_failed",
+      FIRMWARE_VERSION,
+      FIRMWARE_VERSION,
+      "Manifest request failed"
+    );
+    return false;
+  }
+
+  if (!manifest.updateAvailable) {
+    Serial.println("OTA manifest says device is already on the latest version.");
+    setOtaState(OTA_STATE_IDLE, "", "");
+    reportUpdateEvent(
+      "update_not_available",
+      FIRMWARE_VERSION,
+      manifest.latestVersion.length() > 0
+        ? manifest.latestVersion
+        : FIRMWARE_VERSION,
+      "Manifest reported no update"
+    );
+    return false;
+  }
+
+  if (autoCheck && !manifest.autoUpdateEnabled) {
+    Serial.println("OTA auto-check found an update, but auto updates are off.");
+    setOtaState(OTA_STATE_IDLE, manifest.latestVersion, "");
+    reportUpdateEvent(
+      "update_not_available",
+      FIRMWARE_VERSION,
+      manifest.latestVersion,
+      "Auto update is disabled for this device"
+    );
+    return false;
+  }
+
+  setOtaState(OTA_STATE_UPDATE_AVAILABLE, manifest.latestVersion, "");
+  reportUpdateEvent(
+    "update_available",
+    FIRMWARE_VERSION,
+    manifest.latestVersion,
+    "Manifest reported an update"
+  );
+
+  if (
+    manifest.board.length() > 0 &&
+    manifest.board != "esp8266-d1d4"
+  ) {
+    Serial.print("OTA manifest rejected: unsupported board ");
+    Serial.println(manifest.board);
+    setOtaState(
+      OTA_STATE_FAILED,
+      manifest.latestVersion,
+      "Unsupported board in manifest"
+    );
+    reportUpdateEvent(
+      "update_failed",
+      FIRMWARE_VERSION,
+      manifest.latestVersion,
+      "Unsupported board in manifest"
+    );
+    return false;
+  }
+
+  if (manifest.artifactUrl.length() == 0 || manifest.sha256.length() != 64) {
+    Serial.println("OTA manifest rejected: artifactUrl or sha256 is missing.");
+    setOtaState(
+      OTA_STATE_FAILED,
+      manifest.latestVersion,
+      "Manifest missing artifactUrl or sha256"
+    );
+    reportUpdateEvent(
+      "update_failed",
+      FIRMWARE_VERSION,
+      manifest.latestVersion,
+      "Manifest missing artifactUrl or sha256"
+    );
+    return false;
+  }
+
+  setOtaState(OTA_STATE_DOWNLOADING, manifest.latestVersion, "");
+  reportUpdateEvent(
+    "update_started",
+    FIRMWARE_VERSION,
+    manifest.latestVersion,
+    "OTA download starting"
+  );
+
+  OtaDownloadResult downloadResult;
+  if (!downloadFirmware(manifest, &downloadResult)) {
+    setOtaState(
+      OTA_STATE_FAILED,
+      manifest.latestVersion,
+      "Firmware download failed"
+    );
+    reportUpdateEvent(
+      "update_failed",
+      FIRMWARE_VERSION,
+      manifest.latestVersion,
+      "Firmware download failed"
+    );
+    return false;
+  }
+
+  setOtaState(OTA_STATE_VERIFYING_HASH, manifest.latestVersion, "");
+  if (!verifySha256(manifest.sha256, downloadResult.computedSha256)) {
+    Serial.println("OTA sha256 verification failed.");
+    discardPendingOtaUpdate();
+    setOtaState(OTA_STATE_FAILED, manifest.latestVersion, "sha256 mismatch");
+    reportUpdateEvent(
+      "update_failed",
+      FIRMWARE_VERSION,
+      manifest.latestVersion,
+      "sha256 mismatch"
+    );
+    return false;
+  }
+
+  setOtaState(OTA_STATE_INSTALLING, manifest.latestVersion, "");
+  if (!installFirmware(manifest, downloadResult)) {
+    setOtaState(OTA_STATE_FAILED, manifest.latestVersion, "Install failed");
+    reportUpdateEvent(
+      "update_failed",
+      FIRMWARE_VERSION,
+      manifest.latestVersion,
+      "Install failed"
+    );
+    return false;
+  }
+
+  setOtaState(OTA_STATE_SUCCESS_PENDING_REBOOT, manifest.latestVersion, "");
+  reportUpdateEvent(
+    "update_success",
+    FIRMWARE_VERSION,
+    manifest.latestVersion,
+    String("Installed bytes=") + downloadResult.downloadedBytes
+  );
+
+  setOtaState(OTA_STATE_REBOOTING, manifest.latestVersion, "");
+  Serial.println("OTA success. Rebooting in 750ms.");
+  delay(750);
+  ESP.restart();
+  return true;
+}
+
 void handleCheckUpdateCommand(const char* source) {
   Serial.print("Command received: type=CHECK_UPDATE source=");
   Serial.println(source);
 
-  setOtaState(
-    OTA_STATE_DISABLED,
-    "",
-    "OTA disabled in ESP8266 firmware."
-  );
-  publishStatus(true);
+  if (!checkForUpdate(false)) {
+    publishStatus(true);
+  }
 }
 
 bool connectMqtt() {
@@ -1008,6 +1826,44 @@ bool connectMqtt() {
   setDeviceMode(DEVICE_MODE_READY);
   publishStatus(true);
   return true;
+}
+
+bool otaCheckInProgress() {
+  return otaState == OTA_STATE_CHECKING_MANIFEST ||
+         otaState == OTA_STATE_UPDATE_AVAILABLE ||
+         otaState == OTA_STATE_DOWNLOADING ||
+         otaState == OTA_STATE_VERIFYING_HASH ||
+         otaState == OTA_STATE_INSTALLING ||
+         otaState == OTA_STATE_SUCCESS_PENDING_REBOOT ||
+         otaState == OTA_STATE_REBOOTING;
+}
+
+void maybeRunAutoUpdateCheck() {
+  if (!ENABLE_OTA_UPDATES || setupPortalActive || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  if (isMoving() || otaCheckInProgress()) {
+    return;
+  }
+
+  const unsigned long now = millis();
+
+  if (now - bootStartedMs < OTA_AUTO_CHECK_INITIAL_DELAY_MS) {
+    return;
+  }
+
+  if (
+    lastAutoUpdateCheckMs != 0 &&
+    now - lastAutoUpdateCheckMs < OTA_AUTO_CHECK_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  lastAutoUpdateCheckMs = now;
+  if (!checkForUpdate(true)) {
+    publishStatus(true);
+  }
 }
 
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
@@ -1182,4 +2038,6 @@ void loop() {
   if (mqttClient.connected() && millis() - lastStatusPublishMs >= STATUS_INTERVAL_MS) {
     publishStatus(false);
   }
+
+  maybeRunAutoUpdateCheck();
 }

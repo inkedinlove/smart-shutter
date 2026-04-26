@@ -519,6 +519,12 @@ bool beginHttpClient(
   return false;
 }
 
+void addOtaAuthHeaders(HTTPClient& http) {
+  http.addHeader("X-Smart-Shutter-Device-Id", resolvedDeviceId);
+  http.addHeader("X-Smart-Shutter-Mqtt-Username", MQTT_USERNAME);
+  http.addHeader("X-Smart-Shutter-Mqtt-Password", MQTT_PASSWORD);
+}
+
 size_t buildStatusPayload(
   char* payload,
   size_t payloadSize,
@@ -901,6 +907,7 @@ bool reportUpdateEvent(
     return false;
   }
 
+  addOtaAuthHeaders(http);
   http.addHeader("Content-Type", "application/json");
 
   StaticJsonDocument<384> eventDoc;
@@ -950,6 +957,7 @@ bool fetchOtaManifest(OtaManifest* manifest) {
     return false;
   }
 
+  addOtaAuthHeaders(http);
   const int responseCode = http.GET();
   if (responseCode != HTTP_CODE_OK) {
     Serial.print("OTA manifest request failed, response code=");

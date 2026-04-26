@@ -180,6 +180,8 @@ export function parseStatusMessage(
       wifiConnected: parseOptionalBoolean(parsed.wifiConnected),
       mqttConnected: parseOptionalBoolean(parsed.mqttConnected),
       otaEnabled,
+      otaAutoUpdateEnabled: parseOptionalBoolean(parsed.otaAutoUpdateEnabled),
+      otaAutoUpdateChannel: parseOptionalString(parsed.otaAutoUpdateChannel),
       otaState: parseOtaState(parsed.otaState, otaEnabled),
       otaLastError: parseOptionalString(parsed.otaLastError),
       otaTargetVersion: parseOptionalString(parsed.otaTargetVersion),

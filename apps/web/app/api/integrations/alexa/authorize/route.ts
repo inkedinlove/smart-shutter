@@ -22,6 +22,14 @@ function createTextResponse(message: string, status = 400): NextResponse {
   });
 }
 
+function getUrlHostSafely(value: string): string | null {
+  try {
+    return new URL(value).host;
+  } catch {
+    return null;
+  }
+}
+
 function redirectWithOauthError(input: {
   redirectUri: string;
   state: string;
@@ -45,6 +53,7 @@ function redirectWithOauthError(input: {
 
 export async function GET(request: Request) {
   if (!isAlexaSkillEnabled()) {
+    console.warn("Alexa authorize rejected because the skill is disabled.");
     return createTextResponse("Alexa account linking is disabled.", 503);
   }
 
@@ -53,6 +62,7 @@ export async function GET(request: Request) {
   try {
     clientConfig = getAlexaOauthClientConfig();
   } catch (error) {
+    console.error("Alexa authorize rejected because OAuth client config is missing.", error);
     return createTextResponse(
       error instanceof Error ? error.message : "Alexa OAuth is not configured.",
       503,
@@ -69,6 +79,10 @@ export async function GET(request: Request) {
     url.searchParams.get("code_challenge_method")?.trim() ?? "";
 
   if (responseType !== "code") {
+    console.warn("Alexa authorize rejected invalid response_type.", {
+      responseType,
+      redirectUriHost: redirectUri ? getUrlHostSafely(redirectUri) : null,
+    });
     if (redirectUri && isAllowedAlexaRedirectUri(redirectUri)) {
       return redirectWithOauthError({
         redirectUri,
@@ -82,10 +96,16 @@ export async function GET(request: Request) {
   }
 
   if (!redirectUri || !isAllowedAlexaRedirectUri(redirectUri)) {
+    console.warn("Alexa authorize rejected invalid redirect_uri.", {
+      redirectUri,
+    });
     return createTextResponse("The Alexa redirect_uri is missing or invalid.", 400);
   }
 
   if (clientId !== clientConfig.clientId) {
+    console.warn("Alexa authorize rejected mismatched client_id.", {
+      receivedClientId: clientId,
+    });
     return redirectWithOauthError({
       redirectUri,
       state,
@@ -98,6 +118,12 @@ export async function GET(request: Request) {
   const userId = typeof session?.user?.id === "string" ? session.user.id.trim() : "";
 
   if (!userId) {
+    console.info("Alexa authorize requires sign-in before linking.", {
+      clientId,
+      redirectUriHost: new URL(redirectUri).host,
+      hasPkce: Boolean(codeChallenge),
+      codeChallengeMethod: codeChallengeMethod || null,
+    });
     const loginUrl = new URL("/login", url.origin);
     loginUrl.searchParams.set("callbackUrl", url.toString());
     return NextResponse.redirect(loginUrl, {
@@ -110,6 +136,10 @@ export async function GET(request: Request) {
   const profile = await getUserProfileByUserId(userId);
 
   if (!profile) {
+    console.warn("Alexa authorize rejected because no customer profile exists.", {
+      userId,
+      clientId,
+    });
     return redirectWithOauthError({
       redirectUri,
       state,
@@ -132,6 +162,14 @@ export async function GET(request: Request) {
   if (state) {
     redirectUrl.searchParams.set("state", state);
   }
+
+  console.info("Alexa authorize issued authorization code.", {
+    profileId: profile.profileId,
+    clientId,
+    redirectUriHost: redirectUrl.host,
+    hasPkce: Boolean(codeChallenge),
+    codeChallengeMethod: codeChallengeMethod || null,
+  });
 
   return NextResponse.redirect(redirectUrl, {
     headers: {

@@ -10,6 +10,8 @@
       "commandTopic": "shutters/shutter-dev-001/commands",
       "statusTopic": "shutters/shutter-dev-001/status",
       "brokerProfile": "hivemq-dev",
+      "otaAutoUpdateEnabled": false,
+      "otaAutoUpdateChannel": "stable",
       "ownerProfileId": "demo-profile",
       "createdAt": "2026-04-23T00:00:00.000Z"
     }

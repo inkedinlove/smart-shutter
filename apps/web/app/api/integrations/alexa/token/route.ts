@@ -50,6 +50,7 @@ function createOauthErrorResponse(
 
 export async function POST(request: Request) {
   if (!isAlexaSkillEnabled()) {
+    console.warn("Alexa token rejected because the skill is disabled.");
     return createOauthErrorResponse(
       "temporarily_unavailable",
       "Alexa account linking is disabled for this deployment.",
@@ -60,6 +61,7 @@ export async function POST(request: Request) {
   try {
     getAlexaOauthClientConfig();
   } catch (error) {
+    console.error("Alexa token rejected because OAuth client config is missing.", error);
     return createOauthErrorResponse(
       "server_error",
       error instanceof Error ? error.message : "Alexa OAuth is not configured.",
@@ -78,6 +80,10 @@ export async function POST(request: Request) {
   const grantType = body.get("grant_type")?.trim() ?? "";
 
   if (!validateConfiguredAlexaClient({ clientId, clientSecret })) {
+    console.warn("Alexa token rejected invalid client credentials.", {
+      grantType,
+      receivedClientId: clientId,
+    });
     return createOauthErrorResponse(
       "invalid_client",
       "The Alexa client credentials were invalid.",
@@ -94,6 +100,11 @@ export async function POST(request: Request) {
     const codeVerifier = body.get("code_verifier")?.trim() ?? "";
 
     if (!code || !redirectUri) {
+      console.warn("Alexa token rejected missing code or redirect_uri.", {
+        grantType,
+        hasCode: Boolean(code),
+        hasRedirectUri: Boolean(redirectUri),
+      });
       return createOauthErrorResponse(
         "invalid_request",
         "The code and redirect_uri fields are required.",
@@ -103,6 +114,10 @@ export async function POST(request: Request) {
     const validation = validateAlexaAuthorizationCode(code);
 
     if (!validation.ok) {
+      console.warn("Alexa token rejected invalid authorization code.", {
+        reason: validation.reason,
+        clientId,
+      });
       return createOauthErrorResponse(
         "invalid_grant",
         validation.reason === "expired"
@@ -112,6 +127,10 @@ export async function POST(request: Request) {
     }
 
     if (validation.payload.clientId !== clientId) {
+      console.warn("Alexa token rejected authorization code client mismatch.", {
+        issuedClientId: validation.payload.clientId,
+        receivedClientId: clientId,
+      });
       return createOauthErrorResponse(
         "invalid_grant",
         "The Alexa authorization code was issued for a different client.",
@@ -119,6 +138,10 @@ export async function POST(request: Request) {
     }
 
     if (validation.payload.redirectUri !== redirectUri) {
+      console.warn("Alexa token rejected redirect_uri mismatch.", {
+        issuedRedirectUri: validation.payload.redirectUri,
+        receivedRedirectUri: redirectUri,
+      });
       return createOauthErrorResponse(
         "invalid_grant",
         "The redirect_uri did not match the original Alexa authorization request.",
@@ -132,6 +155,10 @@ export async function POST(request: Request) {
         codeVerifier,
       })
     ) {
+      console.warn("Alexa token rejected invalid PKCE verifier.", {
+        clientId,
+        codeChallengeMethod: validation.payload.codeChallengeMethod,
+      });
       return createOauthErrorResponse(
         "invalid_grant",
         "The Alexa PKCE verifier was invalid.",
@@ -141,6 +168,9 @@ export async function POST(request: Request) {
     const linkedProfile = await getAlexaAuthorizedProfile(validation.payload.profileId);
 
     if (!linkedProfile.exists) {
+      console.warn("Alexa token rejected because linked profile no longer exists.", {
+        profileId: validation.payload.profileId,
+      });
       return createOauthErrorResponse(
         "invalid_grant",
         "The linked Smart Shutter account no longer exists.",
@@ -158,6 +188,12 @@ export async function POST(request: Request) {
       clientId,
     });
 
+    console.info("Alexa token issued access and refresh tokens.", {
+      profileId: validation.payload.profileId,
+      clientId,
+      expiresIn,
+    });
+
     return createOauthJsonResponse({
       access_token: accessToken,
       token_type: "bearer",
@@ -170,6 +206,9 @@ export async function POST(request: Request) {
     const refreshToken = body.get("refresh_token")?.trim() ?? "";
 
     if (!refreshToken) {
+      console.warn("Alexa token rejected missing refresh_token.", {
+        grantType,
+      });
       return createOauthErrorResponse(
         "invalid_request",
         "The refresh_token field is required.",
@@ -179,6 +218,10 @@ export async function POST(request: Request) {
     const validation = validateAlexaRefreshToken(refreshToken);
 
     if (!validation.ok) {
+      console.warn("Alexa token rejected invalid refresh token.", {
+        reason: validation.reason,
+        clientId,
+      });
       return createOauthErrorResponse(
         "invalid_grant",
         validation.reason === "expired"
@@ -188,6 +231,10 @@ export async function POST(request: Request) {
     }
 
     if (validation.payload.clientId !== clientId) {
+      console.warn("Alexa token rejected refresh token client mismatch.", {
+        issuedClientId: validation.payload.clientId,
+        receivedClientId: clientId,
+      });
       return createOauthErrorResponse(
         "invalid_grant",
         "The Alexa refresh token was issued for a different client.",
@@ -197,6 +244,10 @@ export async function POST(request: Request) {
     const linkedProfile = await getAlexaAuthorizedProfile(validation.payload.profileId);
 
     if (!linkedProfile.exists || !linkedProfile.linked) {
+      console.warn("Alexa token rejected because refresh token profile is unavailable.", {
+        profileId: validation.payload.profileId,
+        linked: linkedProfile.linked,
+      });
       return createOauthErrorResponse(
         "invalid_grant",
         "The linked Smart Shutter account is no longer available for Alexa access.",
@@ -212,6 +263,12 @@ export async function POST(request: Request) {
       clientId,
     });
 
+    console.info("Alexa token refreshed access token.", {
+      profileId: validation.payload.profileId,
+      clientId,
+      expiresIn,
+    });
+
     return createOauthJsonResponse({
       access_token: accessToken,
       token_type: "bearer",
@@ -220,6 +277,10 @@ export async function POST(request: Request) {
     });
   }
 
+  console.warn("Alexa token rejected unsupported grant type.", {
+    grantType,
+    clientId,
+  });
   return createOauthErrorResponse(
     "unsupported_grant_type",
     "Smart Shutter Alexa OAuth supports authorization_code and refresh_token grants only.",

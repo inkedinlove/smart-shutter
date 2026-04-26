@@ -69,6 +69,8 @@ export type RegisteredDevice = {
   commandTopic: string;
   statusTopic: string;
   brokerProfile: BrokerProfile;
+  otaAutoUpdateEnabled: boolean;
+  otaAutoUpdateChannel: string;
   ownerProfileId?: string | null;
   ownerProfile?: ProfileSummary | null;
   createdAt: string;
@@ -98,7 +100,22 @@ type DeviceRegistry = {
 };
 
 const registry = devicesRegistry as DeviceRegistry;
-const REGISTERED_DEVICES = registry.devices;
+
+function normalizeRegisteredDevice(device: RegisteredDevice): RegisteredDevice {
+  return {
+    ...device,
+    otaAutoUpdateEnabled: device.otaAutoUpdateEnabled ?? false,
+    otaAutoUpdateChannel:
+      typeof device.otaAutoUpdateChannel === "string" &&
+      device.otaAutoUpdateChannel.trim().length > 0
+        ? device.otaAutoUpdateChannel.trim()
+        : "stable",
+  };
+}
+
+const REGISTERED_DEVICES = registry.devices.map((device) =>
+  normalizeRegisteredDevice(device as RegisteredDevice),
+);
 
 export function listStaticRegisteredDevices(): RegisteredDevice[] {
   return REGISTERED_DEVICES;
@@ -148,6 +165,7 @@ export function createFirmwareDefinesPreview(
     "#define ENABLE_OTA_UPDATES false",
     `#define API_BASE_URL "${broker.publicAppBaseUrl}"`,
     '#define OTA_MANIFEST_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/manifest"',
+    '#define OTA_EVENTS_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/events"',
   ].join("\n");
 }
 

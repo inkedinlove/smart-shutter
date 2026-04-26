@@ -11,18 +11,13 @@ import {
 } from "@/lib/client-fetch";
 import type { DeviceStatus, OtaState } from "@/lib/device";
 import type {
+  FirmwareAutoUpdatePreference,
   FirmwareCheckResponse,
   FirmwareManifestResponse,
 } from "@/lib/firmware";
 import { useDeviceRegistry } from "@/lib/use-device-registry";
 
 const STATUS_POLL_MS = 3000;
-
-type FirmwareConsoleProps = {
-  experimentalOtaUiEnabled: boolean;
-};
-
-type DeviceUpdateIntent = "check" | "update";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -45,6 +40,17 @@ function isFirmwareManifestResponse(
     typeof value.deviceId === "string" &&
     typeof value.channel === "string" &&
     typeof value.updateAvailable === "boolean"
+  );
+}
+
+function isFirmwareAutoUpdatePreference(
+  value: unknown,
+): value is FirmwareAutoUpdatePreference {
+  return (
+    isRecord(value) &&
+    typeof value.deviceId === "string" &&
+    typeof value.autoUpdateEnabled === "boolean" &&
+    typeof value.autoUpdateChannel === "string"
   );
 }
 
@@ -220,9 +226,7 @@ async function fetchUpdateManifest(
   );
 }
 
-export default function FirmwareConsole({
-  experimentalOtaUiEnabled,
-}: FirmwareConsoleProps) {
+export default function FirmwareConsole() {
   const {
     deviceRegistryError,
     devices,
@@ -240,9 +244,23 @@ export default function FirmwareConsole({
   const [isChecking, setIsChecking] = useState(false);
   const [isSendingDeviceCheck, setIsSendingDeviceCheck] = useState(false);
   const [isLoadingManifest, setIsLoadingManifest] = useState(false);
+  const [isSavingAutoUpdate, setIsSavingAutoUpdate] = useState(false);
+  const [autoUpdateEnabledDraft, setAutoUpdateEnabledDraft] = useState(false);
+  const [autoUpdateChannelDraft, setAutoUpdateChannelDraft] = useState("stable");
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const hasLoadedStatus = useRef(false);
+
+  useEffect(() => {
+    setAutoUpdateEnabledDraft(selectedDevice?.otaAutoUpdateEnabled ?? false);
+    setAutoUpdateChannelDraft(
+      selectedDevice?.otaAutoUpdateChannel?.trim() || "stable",
+    );
+  }, [
+    selectedDevice?.deviceId,
+    selectedDevice?.otaAutoUpdateEnabled,
+    selectedDevice?.otaAutoUpdateChannel,
+  ]);
 
   useEffect(() => {
     if (!selectedDeviceId) {
@@ -390,10 +408,7 @@ export default function FirmwareConsole({
     }
   }
 
-  async function sendDeviceUpdateCommand(
-    deviceId: string,
-    intent: DeviceUpdateIntent,
-  ) {
+  async function sendDeviceUpdateCommand(deviceId: string) {
     setIsSendingDeviceCheck(true);
     setErrorMessage(null);
     setActionMessage(null);
@@ -419,9 +434,7 @@ export default function FirmwareConsole({
 
       startTransition(() => {
         setActionMessage(
-          intent === "update"
-            ? `Sent Update Firmware to ${deviceId}. The device will continue only when its safety checks allow it.`
-            : `Asked ${deviceId} to check for an update.`,
+          `Asked ${deviceId} to self-check for an update. If a compatible release is available, the device will download and install it over Wi-Fi when its safety checks allow it.`,
         );
       });
     } catch (error) {
@@ -437,6 +450,59 @@ export default function FirmwareConsole({
       );
     } finally {
       setIsSendingDeviceCheck(false);
+    }
+  }
+
+  async function saveAutoUpdatePreference(deviceId: string) {
+    setIsSavingAutoUpdate(true);
+    setErrorMessage(null);
+    setActionMessage(null);
+
+    try {
+      const response = await fetchWithShortTimeout(
+        `/api/devices/${encodeURIComponent(deviceId)}/firmware/preferences`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            autoUpdateEnabled: autoUpdateEnabledDraft,
+            autoUpdateChannel: autoUpdateChannelDraft,
+          }),
+          timeoutMessage: "Saving auto-update preferences timed out.",
+        },
+      );
+      const payload = await readApiData(
+        response,
+        isFirmwareAutoUpdatePreference,
+        "Unable to save auto-update preferences.",
+      );
+
+      await reloadDevices();
+
+      startTransition(() => {
+        setAutoUpdateEnabledDraft(payload.autoUpdateEnabled);
+        setAutoUpdateChannelDraft(payload.autoUpdateChannel);
+        setActionMessage(
+          payload.autoUpdateEnabled
+            ? `${deviceId} will now self-check for ${payload.autoUpdateChannel} updates over Wi-Fi while it is online and idle.`
+            : `Automatic Wi-Fi updates are now off for ${deviceId}. Manual update checks still work.`,
+        );
+      });
+    } catch (error) {
+      if (error instanceof SessionRequiredError) {
+        redirectToLogin(`/firmware?deviceId=${encodeURIComponent(deviceId)}`);
+        return;
+      }
+
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to save auto-update preferences.",
+      );
+    } finally {
+      setIsSavingAutoUpdate(false);
     }
   }
 
@@ -478,12 +544,11 @@ export default function FirmwareConsole({
     };
   }, [checkResult, selectedDeviceId]);
 
-  const canSendExperimentalUpdate =
-    experimentalOtaUiEnabled &&
-    Boolean(selectedDeviceId) &&
-    !isSendingDeviceCheck &&
-    deviceReportsOtaReady &&
-    releaseCheckShowsUpdate;
+  const deviceSelfCheckLabel = isSendingDeviceCheck
+    ? "Checking device..."
+    : releaseCheckShowsUpdate && deviceReportsOtaReady
+      ? "Install update on device"
+      : "Check/install on device";
   const activeErrorMessage = errorMessage ?? deviceRegistryError;
   const activeErrorNextAction = activeErrorMessage
     ? activeErrorMessage.toLowerCase().includes("offline")
@@ -497,6 +562,10 @@ export default function FirmwareConsole({
     !isLoadingStatus &&
     !activeErrorMessage &&
     (!selectedDeviceStatus?.lastSeenAt || !selectedDeviceStatus.online);
+  const autoUpdateDraftChanged =
+    autoUpdateEnabledDraft !== (selectedDevice?.otaAutoUpdateEnabled ?? false) ||
+    autoUpdateChannelDraft !==
+      (selectedDevice?.otaAutoUpdateChannel?.trim() || "stable");
 
   return (
     <AppShell
@@ -654,11 +723,11 @@ export default function FirmwareConsole({
             disabled={isLoadingDevices || isSendingDeviceCheck || !selectedDeviceId}
             onClick={() => {
               if (selectedDeviceId) {
-                void sendDeviceUpdateCommand(selectedDeviceId, "check");
+                void sendDeviceUpdateCommand(selectedDeviceId);
               }
             }}
           >
-            {isSendingDeviceCheck ? "Checking device..." : "Check on device"}
+            {deviceSelfCheckLabel}
           </button>
 
           <button
@@ -674,18 +743,6 @@ export default function FirmwareConsole({
             {isLoadingManifest ? "Loading details..." : "View manifest"}
           </button>
 
-          <button
-            type="button"
-            className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-4 text-base font-semibold text-slate-100 transition hover:border-cyan-300/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-72"
-            disabled={!canSendExperimentalUpdate}
-            onClick={() => {
-              if (selectedDeviceId) {
-                void sendDeviceUpdateCommand(selectedDeviceId, "update");
-              }
-            }}
-          >
-            Update Firmware
-          </button>
         </div>
 
         {selectedDeviceStatus?.safetyMode === true ? (
@@ -698,6 +755,82 @@ export default function FirmwareConsole({
             </p>
           </div>
         ) : null}
+
+        <div className="mt-6 rounded-[1rem] border border-white/10 bg-white/5 p-5">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="space-y-2">
+              <div className="text-xs uppercase tracking-[0.22em] text-slate-400">
+                Auto update
+              </div>
+              <div className="text-xl font-semibold text-white">
+                Let this device install future firmware over Wi-Fi.
+              </div>
+              <p className="max-w-3xl text-sm leading-7 text-slate-400">
+                When enabled, the device checks for new releases on its own roughly hourly while it is online and idle. Manual update checks still work either way.
+              </p>
+            </div>
+
+            <div className="rounded-full border border-white/10 bg-black/20 px-4 py-2 text-sm text-slate-300">
+              Current:{" "}
+              {selectedDevice?.otaAutoUpdateEnabled
+                ? `Auto (${selectedDevice?.otaAutoUpdateChannel ?? "stable"})`
+                : "Manual only"}
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_auto]">
+            <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-black/20 px-4 py-4 text-sm text-slate-200">
+              <input
+                checked={autoUpdateEnabledDraft}
+                className="mt-1"
+                type="checkbox"
+                onChange={(event) => {
+                  setAutoUpdateEnabledDraft(event.target.checked);
+                }}
+              />
+              <span>
+                <span className="block font-semibold text-white">
+                  Install updates automatically
+                </span>
+                <span className="mt-1 block text-slate-400">
+                  Best for shutters that stay powered and connected.
+                </span>
+              </span>
+            </label>
+
+            <label className="block">
+              <span className="text-sm text-slate-300">Release channel</span>
+              <select
+                className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!autoUpdateEnabledDraft}
+                value={autoUpdateChannelDraft}
+                onChange={(event) => {
+                  setAutoUpdateChannelDraft(event.target.value);
+                }}
+              >
+                <option value="stable">Stable</option>
+                <option value="beta">Beta</option>
+              </select>
+            </label>
+
+            <button
+              type="button"
+              className="rounded-xl bg-cyan-400 px-4 py-4 text-base font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-cyan-400/50"
+              disabled={
+                !selectedDeviceId ||
+                isSavingAutoUpdate ||
+                !autoUpdateDraftChanged
+              }
+              onClick={() => {
+                if (selectedDeviceId) {
+                  void saveAutoUpdatePreference(selectedDeviceId);
+                }
+              }}
+            >
+              {isSavingAutoUpdate ? "Saving..." : "Save auto-update setting"}
+            </button>
+          </div>
+        </div>
 
         <div className="mt-6 grid gap-6 xl:grid-cols-2">
           <div className="rounded-[1rem] border border-white/10 bg-white/5 p-5">

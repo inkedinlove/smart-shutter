@@ -17,6 +17,8 @@ model Device {
   mqttCommandTopic     String
   mqttStatusTopic      String
   brokerProfile        String                @default("hivemq-dev")
+  otaAutoUpdateEnabled Boolean               @default(false)
+  otaAutoUpdateChannel String                @default("stable")
   credentialMode       String                @default("shared")
   credentialStatus     String                @default("active")
   credentialIssuedAt   DateTime?

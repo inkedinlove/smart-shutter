@@ -35,11 +35,13 @@ constexpr const char* STATUS_TOPIC = "shutters/{deviceId}/status";
 // OTA Update Settings
 // ---------------------------------------------------------------------------
 
-// The ESP8266 build keeps OTA disabled for now. The web app will still show
-// OTA state as disabled so the rest of the software contract stays intact.
-#define ENABLE_OTA_UPDATES false
+// The D1-D4 build supports HTTPS OTA update checks and installs.
+#define ENABLE_OTA_UPDATES true
 #define API_BASE_URL "https://your-app.example.com"
 #define OTA_MANIFEST_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/manifest"
+#define OTA_EVENTS_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/events"
+#define OTA_AUTO_CHECK_INITIAL_DELAY_MS 300000UL
+#define OTA_AUTO_CHECK_INTERVAL_MS 3600000UL
 
 // ---------------------------------------------------------------------------
 // Optional Behavior Flags

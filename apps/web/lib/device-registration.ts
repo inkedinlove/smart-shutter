@@ -40,6 +40,8 @@ export type DeviceRegistrationState = {
   label: string | null;
   board: DeviceBoard;
   claimState: DeviceClaimState;
+  otaAutoUpdateEnabled: boolean;
+  otaAutoUpdateChannel: string;
   credentialMode: string;
   credentialStatus: string;
   credentialIssuedAt: string | null;
@@ -80,6 +82,8 @@ function mapDatabaseRegistrationState(
     label: device.label,
     board: normalizeDeviceBoard(device.board),
     claimState,
+    otaAutoUpdateEnabled: device.otaAutoUpdateEnabled ?? false,
+    otaAutoUpdateChannel: device.otaAutoUpdateChannel ?? "stable",
     credentialMode: device.credentialMode ?? "shared",
     credentialStatus: device.credentialStatus ?? "active",
     credentialIssuedAt: device.credentialIssuedAt?.toISOString() ?? null,
@@ -109,6 +113,8 @@ function mapStaticRegistrationState(
     label: device.label,
     board: normalizeDeviceBoard(device.board),
     claimState,
+    otaAutoUpdateEnabled: device.otaAutoUpdateEnabled,
+    otaAutoUpdateChannel: device.otaAutoUpdateChannel,
     credentialMode: "shared",
     credentialStatus: "active",
     credentialIssuedAt: null,
@@ -134,6 +140,8 @@ function createUnknownDeviceRegistrationState(
     label: null,
     board: DEFAULT_DEVICE_BOARD,
     claimState: "unknown",
+    otaAutoUpdateEnabled: false,
+    otaAutoUpdateChannel: "stable",
     credentialMode: "shared",
     credentialStatus: "active",
     credentialIssuedAt: null,
@@ -325,17 +333,19 @@ export async function registerDeviceIfMissing(input: {
   }
 
   const topics = buildDefaultDeviceTopics(deviceId);
-  const createData = {
-    deviceId,
-    label,
-    board,
-    status: "factory_registered",
-    mqttCommandTopic: topics.commandTopic,
-    mqttStatusTopic: topics.statusTopic,
-    brokerProfile: "hivemq-dev",
-    credentialMode: "shared",
-    credentialStatus: "active",
-    mqttClientId: buildDeviceMqttClientId(deviceId),
+    const createData = {
+      deviceId,
+      label,
+      board,
+      status: "factory_registered",
+      mqttCommandTopic: topics.commandTopic,
+      mqttStatusTopic: topics.statusTopic,
+      brokerProfile: "hivemq-dev",
+      otaAutoUpdateEnabled: false,
+      otaAutoUpdateChannel: "stable",
+      credentialMode: "shared",
+      credentialStatus: "active",
+      mqttClientId: buildDeviceMqttClientId(deviceId),
   };
   const device = await db.device.create({
     data: createData as never,

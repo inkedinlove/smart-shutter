@@ -31,6 +31,8 @@ async function main() {
       mqttCommandTopic: "shutters/shutter-dev-001/commands",
       mqttStatusTopic: "shutters/shutter-dev-001/status",
       brokerProfile: "hivemq-dev",
+      otaAutoUpdateEnabled: false,
+      otaAutoUpdateChannel: "stable",
       ownerProfileId: demoProfile?.id ?? null,
     },
     create: {
@@ -42,6 +44,8 @@ async function main() {
       mqttCommandTopic: "shutters/shutter-dev-001/commands",
       mqttStatusTopic: "shutters/shutter-dev-001/status",
       brokerProfile: "hivemq-dev",
+      otaAutoUpdateEnabled: false,
+      otaAutoUpdateChannel: "stable",
       ownerProfileId: demoProfile?.id ?? null,
     },
   });

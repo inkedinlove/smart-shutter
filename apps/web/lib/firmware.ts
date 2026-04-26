@@ -43,6 +43,8 @@ export type FirmwareCheckResponse = {
   updateAvailable: boolean;
   board: string | null;
   channel: string;
+  autoUpdateEnabled: boolean;
+  autoUpdateChannel: string;
   releaseNotes: string | null;
   artifactUrl: string | null;
   sha256: string | null;
@@ -56,9 +58,17 @@ export type FirmwareManifestResponse = {
   latestVersion: string | null;
   board: string | null;
   channel: string;
+  autoUpdateEnabled: boolean;
+  autoUpdateChannel: string;
   artifactUrl: string | null;
   sha256: string | null;
   sizeBytes: number | null;
+};
+
+export type FirmwareAutoUpdatePreference = {
+  deviceId: string;
+  autoUpdateEnabled: boolean;
+  autoUpdateChannel: string;
 };
 
 export function isDeviceUpdateEventStatus(
