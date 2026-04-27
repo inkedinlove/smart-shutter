@@ -69,7 +69,7 @@ function getSerialApi(): SerialApiLike | null {
 
 function getEsp8266CompileCommand(board: string | null | undefined): string {
   if (board?.trim().toLowerCase() === "esp8266-d1d4") {
-    return "powershell -ExecutionPolicy Bypass -File scripts/compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2 -SketchDir firmware/esp8266-d1d4-shutter -OutputDir .arduino-build/firmware/esp8266-d1d4-shutter";
+    return "powershell -ExecutionPolicy Bypass -File scripts/compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2:mmu=4816 -SketchDir firmware/esp8266-d1d4-shutter -OutputDir .arduino-build/firmware/esp8266-d1d4-shutter";
   }
 
   if (board?.trim().toLowerCase() === "esp8266-servo") {

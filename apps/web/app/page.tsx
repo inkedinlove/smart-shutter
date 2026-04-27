@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { startTransition, useEffect, useRef, useState } from "react";
 
 import AppShell from "@/app/_components/app-shell";
@@ -27,32 +28,9 @@ type DashboardCommandInput =
       type: "STOP";
     };
 
-type FirstTestStep = {
-  label: string;
-};
-
 const PRESET_VALUES = [0, 25, 50, 75, 100] as const;
 const STATUS_POLL_MS = 3000;
-const FIRST_TEST_SEQUENCE: FirstTestStep[] = [
-  {
-    label: "50%",
-  },
-  {
-    label: "STOP",
-  },
-  {
-    label: "0%",
-  },
-  {
-    label: "100%",
-  },
-  {
-    label: "25%",
-  },
-  {
-    label: "75%",
-  },
-];
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -123,10 +101,15 @@ function getDeviceModeClasses(mode: DeviceMode, hasSeenStatus: boolean): string 
   }
 }
 
+function isTimeoutError(error: unknown): error is Error {
+  return error instanceof Error && error.message.toLowerCase().includes("timed out");
+}
+
 export default function Home() {
   const {
     deviceRegistryError,
     devices,
+    isAdmin,
     isLoadingDevices,
     reloadDevices,
     selectedDevice,
@@ -213,12 +196,21 @@ export default function Home() {
           return;
         }
 
+        if (options?.silent === true && isTimeoutError(error) && hasLoadedStatus.current) {
+          return;
+        }
+
         startTransition(() => {
-          setStatus(createDefaultDeviceStatus(selectedDeviceId));
+          if (!hasLoadedStatus.current) {
+            setStatus(createDefaultDeviceStatus(selectedDeviceId));
+          }
+
           setErrorMessage(
-            error instanceof Error
-              ? error.message
-              : "Status polling is unavailable right now.",
+            isTimeoutError(error) && hasLoadedStatus.current
+              ? "Live status is taking longer than expected. We’ll keep trying in the background."
+              : error instanceof Error
+                ? error.message
+                : "Status polling is unavailable right now.",
           );
         });
       } finally {
@@ -304,11 +296,24 @@ export default function Home() {
     Math.min(100, Math.round(status.estimatedPercent ?? sliderValue)),
   );
   const activeErrorMessage = errorMessage ?? deviceRegistryError;
+  const needsGuidedSetup =
+    Boolean(selectedDeviceId) &&
+    (status.setupMode === true ||
+      status.safetyMode === true ||
+      status.fullTravelReady === false ||
+      status.calibrationComplete === false);
+  const setupCardTitle = status.setupMode
+    ? "Finish Wi-Fi setup"
+    : "Finish device setup";
+  const setupCardMessage = status.setupMode
+    ? "This shutter is in setup mode. Open guided setup to connect Wi-Fi and finish calibration."
+    : "This shutter still needs guided setup before regular control. Use setup to confirm direction and save the true closed and open positions.";
 
   return (
     <AppShell
       currentPath="/"
       devices={devices}
+      isAdmin={isAdmin}
       isLoadingDevices={isLoadingDevices}
       selectedDeviceId={selectedDeviceId}
       onSelectDevice={(deviceId) => {
@@ -420,41 +425,30 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="mt-6 rounded-[1rem] border border-amber-300/20 bg-amber-300/10 p-5 sm:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div className="text-xs uppercase tracking-[0.24em] text-amber-100/80">
-                Before the first move
+        {needsGuidedSetup ? (
+          <div className="mt-6 rounded-[1rem] border border-amber-300/20 bg-amber-300/10 p-5 sm:p-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <div className="text-xs uppercase tracking-[0.24em] text-amber-100/80">
+                  Setup required
+                </div>
+                <h2 className="mt-2 text-2xl font-semibold text-white">
+                  {setupCardTitle}
+                </h2>
+                <p className="mt-3 max-w-3xl text-sm leading-7 text-amber-50/90">
+                  {setupCardMessage}
+                </p>
               </div>
-              <h2 className="mt-2 text-2xl font-semibold text-white">
-                Start small
-              </h2>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-amber-50/90">
-                Keep hands clear of the shutter. Press STOP immediately if the shutter binds,
-                buzzes, clicks, or strains.
-              </p>
-            </div>
 
-            <div className="rounded-full border border-amber-200/20 bg-black/20 px-4 py-2 text-sm text-amber-100">
-              Guided sequence
-            </div>
-          </div>
-
-          <div className="mt-5 flex flex-wrap gap-3">
-            {FIRST_TEST_SEQUENCE.map((step, index) => (
-              <div
-                key={step.label}
-                className="rounded-full border border-white/10 bg-black/15 px-4 py-2 text-sm font-medium text-white"
+              <Link
+                href="/connect"
+                className="inline-flex rounded-xl border border-amber-200/20 bg-black/20 px-4 py-3 text-sm font-semibold uppercase tracking-[0.18em] text-amber-50 transition hover:bg-black/30"
               >
-                {index + 1}. {step.label}
-              </div>
-            ))}
+                Open setup
+              </Link>
+            </div>
           </div>
-
-          <p className="mt-4 text-sm text-amber-50/80">
-            Use the controls below for movement. Use <span className="font-semibold text-white">/connect</span> for the guided setup flow.
-          </p>
-        </div>
+        ) : null}
 
         <div className="mt-6 rounded-[1rem] border border-white/10 bg-white/5 p-5 sm:p-6">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

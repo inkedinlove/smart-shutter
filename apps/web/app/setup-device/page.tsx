@@ -78,6 +78,7 @@ function SetupDevicePageContent() {
   const requestedDeviceId = searchParams.get("deviceId")?.trim() ?? "";
   const {
     devices,
+    isAdmin,
     isLoadingDevices,
     selectedDevice,
     selectedDeviceId,
@@ -233,6 +234,7 @@ function SetupDevicePageContent() {
     <AppShell
       currentPath="/devices"
       devices={devices}
+      isAdmin={isAdmin}
       isLoadingDevices={isLoadingDevices}
       selectedDeviceId={selectedDeviceId}
       onSelectDevice={(deviceId) => {

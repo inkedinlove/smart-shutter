@@ -1,4 +1,6 @@
 #include <AccelStepper.h>
+#define ARDUINOJSON_USE_DOUBLE 0
+#define ARDUINOJSON_USE_LONG_LONG 0
 #include <ArduinoJson.h>
 #include <EEPROM.h>
 #include <ESP8266HTTPClient.h>
@@ -22,6 +24,10 @@
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "0.1.0-dev-esp8266-d1d4"
 #endif
+
+// Recommended Arduino IDE board settings for this build:
+// - Board: NodeMCU 1.0 (ESP-12E Module)
+// - MMU: 16KB cache + 48KB IRAM (IRAM)
 
 #ifndef ENABLE_OTA_UPDATES
 #define ENABLE_OTA_UPDATES false
@@ -136,12 +142,16 @@ struct StoredDeviceSettings {
   int32_t closedPositionSteps;
   int32_t openPositionSteps;
   uint8_t calibrationComplete;
-  uint8_t reserved[3];
+  uint8_t directionInverted;
+  uint8_t endpointMask;
+  uint8_t reserved;
 };
 
 constexpr uint32_t STORED_WIFI_MAGIC = 0x53535431;
 constexpr uint32_t STORED_DEVICE_SETTINGS_MAGIC = 0x53535432;
 constexpr long MIN_CALIBRATION_SPAN_STEPS = 64L;
+constexpr uint8_t CALIBRATION_ENDPOINT_CLOSED = 0x01;
+constexpr uint8_t CALIBRATION_ENDPOINT_OPEN = 0x02;
 
 BearSSL::WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
@@ -163,6 +173,7 @@ unsigned long setupPortalStartedMs = 0;
 bool wifiConnectInProgress = false;
 bool setupPortalActive = false;
 bool movementLocked = false;
+bool directionInverted = INVERT_DIRECTION;
 bool calibrationComplete = !SAFE_SETUP_MODE;
 bool lastMovingState = false;
 bool lastWiFiConnectedState = false;
@@ -170,6 +181,7 @@ bool lastWiFiConnectedState = false;
 int targetPercent = 0;
 long calibratedClosedPositionSteps = 0;
 long calibratedOpenPositionSteps = TRAVEL_STEPS;
+uint8_t calibrationEndpointMask = 0;
 
 String resolvedDeviceId = "";
 String resolvedMqttClientId = "";
@@ -252,16 +264,10 @@ void setDeviceMode(DeviceMode nextMode) {
   Serial.println(deviceModeToString(deviceMode));
 }
 
-float clampUnitRatio(float value) {
-  if (value < 0.0f) {
-    return 0.0f;
-  }
-
-  if (value > 1.0f) {
-    return 1.0f;
-  }
-
-  return value;
+long scaleMagnitudeByPercent(long magnitudeSteps, int percent) {
+  const long clampedMagnitude = max(0L, magnitudeSteps);
+  const int clampedPercent = constrain(percent, 0, 100);
+  return (clampedMagnitude * static_cast<long>(clampedPercent) + 50L) / 100L;
 }
 
 long getCalibratedSpanSteps() {
@@ -272,6 +278,20 @@ long getCalibratedSpanSteps() {
   }
 
   return INVERT_DIRECTION ? -TRAVEL_STEPS : TRAVEL_STEPS;
+}
+
+bool hasMarkedClosedEndpoint() {
+  return (calibrationEndpointMask & CALIBRATION_ENDPOINT_CLOSED) != 0;
+}
+
+bool hasMarkedOpenEndpoint() {
+  return (calibrationEndpointMask & CALIBRATION_ENDPOINT_OPEN) != 0;
+}
+
+bool hasFullTravelCalibration() {
+  return hasMarkedClosedEndpoint() &&
+         hasMarkedOpenEndpoint() &&
+         hasMeaningfulCalibrationSpan();
 }
 
 long getCalibrationTravelSpanMagnitude() {
@@ -291,11 +311,15 @@ bool hasMeaningfulCalibrationSpan() {
 int stepsToPercent(long steps) {
   const long closedSteps = calibratedClosedPositionSteps;
   const long spanSteps = getCalibratedSpanSteps();
-  const float ratio = clampUnitRatio(
-    static_cast<float>(steps - closedSteps) / static_cast<float>(spanSteps));
-  const int effectivePercent = static_cast<int>(round(ratio * 100.0f));
+  const long spanMagnitude = max(1L, labs(spanSteps));
+  const long relativeSteps = steps - closedSteps;
+  long progressSteps = spanSteps >= 0 ? relativeSteps : -relativeSteps;
+  progressSteps = constrain(progressSteps, 0L, spanMagnitude);
+  const int effectivePercent = static_cast<int>(
+    (progressSteps * 100L + spanMagnitude / 2L) / spanMagnitude
+  );
   const int mappedPercent =
-    INVERT_DIRECTION ? 100 - effectivePercent : effectivePercent;
+    directionInverted ? 100 - effectivePercent : effectivePercent;
 
   return constrain(mappedPercent, 0, 100);
 }
@@ -303,12 +327,12 @@ int stepsToPercent(long steps) {
 long percentToSteps(int percent) {
   const int clampedPercent = constrain(percent, 0, 100);
   const int effectivePercent =
-    INVERT_DIRECTION ? 100 - clampedPercent : clampedPercent;
-  const float ratio = static_cast<float>(effectivePercent) / 100.0f;
-
-  return lround(
-    static_cast<float>(calibratedClosedPositionSteps) +
-    ratio * static_cast<float>(getCalibratedSpanSteps()));
+    directionInverted ? 100 - clampedPercent : clampedPercent;
+  const long spanSteps = getCalibratedSpanSteps();
+  const long offsetMagnitude =
+    scaleMagnitudeByPercent(labs(spanSteps), effectivePercent);
+  const long signedOffset = spanSteps >= 0 ? offsetMagnitude : -offsetMagnitude;
+  return calibratedClosedPositionSteps + signedOffset;
 }
 
 bool isMoving() {
@@ -328,7 +352,7 @@ DeviceMode getIdleModeFromConnectivity() {
 }
 
 bool isCalibrationRestricted() {
-  return SAFE_SETUP_MODE && !calibrationComplete;
+  return SAFE_SETUP_MODE && !hasFullTravelCalibration();
 }
 
 bool isSafetyModeActive() {
@@ -341,11 +365,35 @@ int getAllowedMaxPercentStep() {
 
 long getCalibrationJogSteps(int amount) {
   const long baseSpan = getCalibrationTravelSpanMagnitude();
-  const long jogSteps = lround(
-    static_cast<float>(baseSpan) *
-    (static_cast<float>(constrain(amount, 1, 100)) / 100.0f));
+  const long jogSteps =
+    scaleMagnitudeByPercent(baseSpan, constrain(amount, 1, 100));
 
   return max(1L, jogSteps);
+}
+
+bool tryReadCommandInt(JsonVariantConst value, int* parsedValue) {
+  if (value.is<int>() || value.is<long>()) {
+    *parsedValue = value.as<int>();
+    return true;
+  }
+
+  if (value.is<const char*>()) {
+    const char* rawValue = value.as<const char*>();
+    if (rawValue == nullptr || rawValue[0] == '\0') {
+      return false;
+    }
+
+    char* endPtr = nullptr;
+    const long parsedLong = strtol(rawValue, &endPtr, 10);
+    if (endPtr == rawValue) {
+      return false;
+    }
+
+    *parsedValue = static_cast<int>(parsedLong);
+    return true;
+  }
+
+  return false;
 }
 
 void rememberCalibrationAction(const char* action) {
@@ -432,7 +480,8 @@ void copyStringToBuffer(const String& value, char* buffer, size_t size) {
 
 void resetCalibrationRangeToDefaults() {
   calibratedClosedPositionSteps = 0;
-  calibratedOpenPositionSteps = INVERT_DIRECTION ? -TRAVEL_STEPS : TRAVEL_STEPS;
+  calibratedOpenPositionSteps = directionInverted ? -TRAVEL_STEPS : TRAVEL_STEPS;
+  calibrationEndpointMask = 0;
   calibrationComplete = !SAFE_SETUP_MODE;
 }
 
@@ -446,6 +495,8 @@ bool savePersistedDeviceSettings(const String& ssid, const String& password) {
   stored.closedPositionSteps = static_cast<int32_t>(calibratedClosedPositionSteps);
   stored.openPositionSteps = static_cast<int32_t>(calibratedOpenPositionSteps);
   stored.calibrationComplete = calibrationComplete ? 1 : 0;
+  stored.directionInverted = directionInverted ? 1 : 0;
+  stored.endpointMask = calibrationEndpointMask;
 
   EEPROM.put(0, stored);
   return EEPROM.commit();
@@ -468,12 +519,21 @@ void loadStoredWiFiCredentials(String* ssid, String* password) {
 
     *ssid = String(storedSettings.ssid);
     *password = String(storedSettings.password);
+    directionInverted = storedSettings.directionInverted == 1;
     calibratedClosedPositionSteps =
       static_cast<long>(storedSettings.closedPositionSteps);
     calibratedOpenPositionSteps =
       static_cast<long>(storedSettings.openPositionSteps);
+    calibrationEndpointMask = storedSettings.endpointMask;
     calibrationComplete =
       SAFE_SETUP_MODE ? storedSettings.calibrationComplete == 1 : true;
+
+    if (calibrationEndpointMask == 0 &&
+        calibrationComplete &&
+        hasMeaningfulCalibrationSpan()) {
+      calibrationEndpointMask =
+        CALIBRATION_ENDPOINT_CLOSED | CALIBRATION_ENDPOINT_OPEN;
+    }
 
     if (!hasMeaningfulCalibrationSpan()) {
       resetCalibrationRangeToDefaults();
@@ -520,6 +580,10 @@ bool saveCalibrationSettings() {
     Serial.print(calibratedClosedPositionSteps);
     Serial.print(" open=");
     Serial.print(calibratedOpenPositionSteps);
+    Serial.print(" directionInverted=");
+    Serial.print(directionInverted ? "true" : "false");
+    Serial.print(" endpoints=");
+    Serial.print(static_cast<int>(calibrationEndpointMask));
     Serial.print(" complete=");
     Serial.println(calibrationComplete ? "true" : "false");
   } else {
@@ -719,6 +783,8 @@ size_t buildStatusPayload(
     statusDoc["otaTargetVersion"] = nullptr;
   }
   statusDoc["calibrationComplete"] = calibrationComplete;
+  statusDoc["fullTravelReady"] = hasFullTravelCalibration();
+  statusDoc["directionInverted"] = directionInverted;
   statusDoc["safetyMode"] = isSafetyModeActive();
   statusDoc["allowedMaxPercentStep"] = getAllowedMaxPercentStep();
   if (lastCalibrationAction.length() > 0) {
@@ -757,6 +823,10 @@ void logStatusSummary(bool published, DeviceMode modeValue, bool movingValue) {
   Serial.print(isSafetyModeActive() ? "true" : "false");
   Serial.print(" calibrated=");
   Serial.print(calibrationComplete ? "true" : "false");
+  Serial.print(" fullTravelReady=");
+  Serial.print(hasFullTravelCalibration() ? "true" : "false");
+  Serial.print(" direction=");
+  Serial.print(directionInverted ? "reversed" : "normal");
   Serial.print(" ota=");
   Serial.println(otaStateToString(otaState));
 }
@@ -1014,7 +1084,7 @@ bool ensureSafeMovementAllowed(
   if (strcmp(commandType, "SET_PERCENT") == 0 && requestedPercent >= 100) {
     rejectMovementCommand(
       commandType,
-      "100% is blocked until calibration is complete."
+      "100% is blocked until closed and open are both set."
     );
     return false;
   }
@@ -1022,7 +1092,7 @@ bool ensureSafeMovementAllowed(
   if (requestedDelta > getAllowedMaxPercentStep()) {
     String reason = "Safe setup mode only allows ";
     reason += getAllowedMaxPercentStep();
-    reason += "% per command until calibration is complete.";
+    reason += "% per command until closed and open are both set.";
     rejectMovementCommand(commandType, reason);
     return false;
   }
@@ -1132,6 +1202,8 @@ void handleSetCurrentAsClosedCommand(const char* source) {
   calibratedOpenPositionSteps =
     calibratedClosedPositionSteps +
     (directionSign * getCalibrationTravelSpanMagnitude());
+  calibrationEndpointMask = CALIBRATION_ENDPOINT_CLOSED;
+  calibrationComplete = false;
   stepper.moveTo(calibratedClosedPositionSteps);
   targetPercent = 0;
   rememberCalibrationAction("SET_CURRENT_AS_CLOSED");
@@ -1160,9 +1232,12 @@ void handleSetCurrentAsOpenCommand(const char* source) {
     return;
   }
 
+  calibrationEndpointMask =
+    CALIBRATION_ENDPOINT_CLOSED | CALIBRATION_ENDPOINT_OPEN;
   stepper.moveTo(calibratedOpenPositionSteps);
   targetPercent = 100;
   rememberCalibrationAction("SET_CURRENT_AS_OPEN");
+  applyMotionProfile();
   syncMovementLockedReason();
   saveCalibrationSettings();
 
@@ -1187,12 +1262,44 @@ void handleMarkCalibrationCompleteCommand(const char* source) {
   }
 
   calibrationComplete = true;
+  calibrationEndpointMask =
+    CALIBRATION_ENDPOINT_CLOSED | CALIBRATION_ENDPOINT_OPEN;
   rememberCalibrationAction("MARK_CALIBRATION_COMPLETE");
   applyMotionProfile();
   syncMovementLockedReason();
   saveCalibrationSettings();
 
   Serial.print("Command received: type=MARK_CALIBRATION_COMPLETE source=");
+  Serial.println(source);
+
+  setDeviceMode(getIdleModeFromConnectivity());
+  publishStatus(true);
+}
+
+void handleSetDirectionCommand(bool nextDirectionInverted, const char* source) {
+  if (!ensureCalibrationCommandCanRun(
+        nextDirectionInverted
+          ? "SET_DIRECTION_REVERSED"
+          : "SET_DIRECTION_NORMAL")) {
+    return;
+  }
+
+  directionInverted = nextDirectionInverted;
+  resetCalibrationRangeToDefaults();
+  calibrationComplete = false;
+  stepper.setCurrentPosition(0);
+  stepper.moveTo(0);
+  targetPercent = 0;
+  rememberCalibrationAction(
+    nextDirectionInverted ? "SET_DIRECTION_REVERSED" : "SET_DIRECTION_NORMAL");
+  applyMotionProfile();
+  syncMovementLockedReason();
+  saveCalibrationSettings();
+
+  Serial.print("Command received: type=");
+  Serial.print(
+    nextDirectionInverted ? "SET_DIRECTION_REVERSED" : "SET_DIRECTION_NORMAL");
+  Serial.print(" source=");
   Serial.println(source);
 
   setDeviceMode(getIdleModeFromConnectivity());
@@ -1894,12 +2001,10 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   }
 
   if (strcmp(type, "NUDGE_OPEN") == 0 || strcmp(type, "NUDGE_CLOSE") == 0) {
-    const float requestedAmount =
-      commandDoc["amount"].is<int>() || commandDoc["amount"].is<float>()
-        ? commandDoc["amount"].as<float>()
-        : SAFE_DEFAULT_NUDGE_PERCENT;
-    const int amount =
-      constrain(static_cast<int>(round(requestedAmount)), 1, SAFE_ALLOWED_MAX_PERCENT_STEP);
+    int amount = SAFE_DEFAULT_NUDGE_PERCENT;
+    if (tryReadCommandInt(commandDoc["amount"], &amount)) {
+      amount = constrain(amount, 1, SAFE_ALLOWED_MAX_PERCENT_STEP);
+    }
     handleNudgeCommand(strcmp(type, "NUDGE_OPEN") == 0, amount, "mqtt");
     return;
   }
@@ -1916,6 +2021,16 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
 
   if (strcmp(type, "MARK_CALIBRATION_COMPLETE") == 0) {
     handleMarkCalibrationCompleteCommand("mqtt");
+    return;
+  }
+
+  if (strcmp(type, "SET_DIRECTION_NORMAL") == 0) {
+    handleSetDirectionCommand(false, "mqtt");
+    return;
+  }
+
+  if (strcmp(type, "SET_DIRECTION_REVERSED") == 0) {
+    handleSetDirectionCommand(true, "mqtt");
     return;
   }
 
@@ -1936,15 +2051,15 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     return;
   }
 
-  if (!commandDoc["value"].is<int>() && !commandDoc["value"].is<float>()) {
+  int nextPercent = 0;
+  if (!tryReadCommandInt(commandDoc["value"], &nextPercent)) {
     Serial.println("Ignoring SET_PERCENT command without numeric `value`.");
     setDeviceMode(DEVICE_MODE_ERROR);
     publishStatus(true);
     return;
   }
 
-  const int nextPercent =
-    constrain(static_cast<int>(round(commandDoc["value"].as<float>())), 0, 100);
+  nextPercent = constrain(nextPercent, 0, 100);
   handleSetPercentCommand(nextPercent, "mqtt");
 }
 

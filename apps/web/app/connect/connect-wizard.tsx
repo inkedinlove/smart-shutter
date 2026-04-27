@@ -109,6 +109,8 @@ type ConnectWizardCommandInput =
       type:
         | "SET_CURRENT_AS_CLOSED"
         | "SET_CURRENT_AS_OPEN"
+        | "SET_DIRECTION_NORMAL"
+        | "SET_DIRECTION_REVERSED"
         | "MARK_CALIBRATION_COMPLETE"
         | "LOCK_MOVEMENT"
         | "UNLOCK_MOVEMENT";
@@ -549,6 +551,10 @@ function getCommandSuccessMessage(
       return `Marked the current position as closed for ${deviceId}.`;
     case "SET_CURRENT_AS_OPEN":
       return `Marked the current position as open for ${deviceId}.`;
+    case "SET_DIRECTION_NORMAL":
+      return `Set the opening direction to normal for ${deviceId}.`;
+    case "SET_DIRECTION_REVERSED":
+      return `Reversed the opening direction for ${deviceId}.`;
     case "MARK_CALIBRATION_COMPLETE":
       return `Marked calibration complete for ${deviceId}.`;
     case "LOCK_MOVEMENT":
@@ -620,6 +626,7 @@ export default function ConnectWizard() {
   const {
     deviceRegistryError,
     devices,
+    isAdmin,
     isLoadingDevices,
     reloadDevices,
     selectedDevice,
@@ -850,13 +857,20 @@ export default function ConnectWizard() {
     checkResult?.deviceId === selectedDeviceId ? checkResult.latestVersion : null;
   const safetyMode = selectedDeviceStatus?.safetyMode === true;
   const calibrationComplete = selectedDeviceStatus?.calibrationComplete === true;
+  const fullTravelReady = selectedDeviceStatus?.fullTravelReady === true;
   const allowedMaxPercentStep =
     selectedDeviceStatus?.allowedMaxPercentStep ??
     DEFAULT_SAFE_ALLOWED_MAX_PERCENT_STEP;
+  const reportedDirectionLabel =
+    selectedDeviceStatus?.directionInverted === true
+      ? "Reversed"
+      : selectedDeviceStatus?.directionInverted === false
+        ? "Normal"
+        : "Unknown";
   const movementLockedReason =
     selectedDeviceStatus?.movementLockedReason ??
-    (safetyMode && !calibrationComplete
-      ? "Calibration is still required before larger movement."
+    (safetyMode && !fullTravelReady
+      ? "Save both the closed and open positions before using larger moves."
       : null);
   const canCalibrate = Boolean(
     selectedDeviceStatus?.lastSeenAt && selectedDeviceStatus.online,
@@ -864,7 +878,7 @@ export default function ConnectWizard() {
   const canRunMotorTest = Boolean(
     selectedDeviceStatus?.lastSeenAt &&
       selectedDeviceStatus.online &&
-      calibrationComplete,
+      fullTravelReady,
   );
   const showCompletedCalibrationState = calibrationComplete && !isRecalibrating;
   const movementLockedByOperator = (selectedDeviceStatus?.movementLockedReason ?? "")
@@ -992,10 +1006,10 @@ export default function ConnectWizard() {
       };
     }
 
-    if (!calibrationComplete) {
+    if (!fullTravelReady) {
       return {
-        title: "Safe calibration still needed",
-        body: "Keep using guided movements until direction is confirmed and both true end positions are marked.",
+        title: "Save closed and open first",
+        body: "Keep moving the shutter until the real closed and open positions are saved.",
       };
     }
 
@@ -1003,7 +1017,7 @@ export default function ConnectWizard() {
         title: "Setup looks good",
         body: "The device is online and the saved endpoints now define the full 0-100 range.",
       };
-  }, [calibrationComplete, selectedDeviceStatus]);
+  }, [fullTravelReady, selectedDeviceStatus]);
 
   const calibrationGuideContent = useMemo(() => {
     if (!canCalibrate) {
@@ -1036,22 +1050,22 @@ export default function ConnectWizard() {
         return {
           eyebrow: "Step 2",
           title: "Check direction",
-          body: "Press Nudge Open once and watch closely.",
-          helper: `Each setup move is capped at ${allowedMaxPercentStep}%, but calibration can keep jogging past the current 0-100 estimate until you save the real endpoints.`,
+          body: "Press Nudge Open once, then choose the direction that really opens the shutter.",
+          helper: `Current saved direction: ${reportedDirectionLabel}. Setup moves are capped at ${allowedMaxPercentStep}% until both endpoints are saved.`,
         };
       case "closed":
         return {
           eyebrow: "Step 3",
           title: "Set closed",
-          body: "Use nudges until the shutter is truly closed, then save this exact endpoint.",
-          helper: "This saved point becomes the new 0% reference. Use Open only for small corrections.",
+          body: "Use Move More for fast travel, then Fine Open or Fine Close to land exactly on true closed.",
+          helper: "This saved point becomes the new 0% reference.",
         };
       case "open":
         return {
           eyebrow: "Step 4",
           title: "Set open",
-          body: "Use nudges until the shutter is truly open, then save this exact endpoint.",
-          helper: "This saved point becomes the new 100% reference. Stop immediately if the shutter binds, clicks, buzzes, or strains.",
+          body: "Use Move More for fast travel, then Fine Open or Fine Close to land exactly on true open.",
+          helper: "This saved point becomes the new 100% reference. Larger percentage moves unlock as soon as both endpoints are saved.",
         };
       case "finish":
         return {
@@ -1068,7 +1082,13 @@ export default function ConnectWizard() {
           helper: "STOP is always available if anything looks wrong.",
       };
     }
-  }, [allowedMaxPercentStep, calibrationGuideStage, canCalibrate, showCompletedCalibrationState]);
+  }, [
+    allowedMaxPercentStep,
+    calibrationGuideStage,
+    canCalibrate,
+    reportedDirectionLabel,
+    showCompletedCalibrationState,
+  ]);
   const calibrationLastActionLabel = formatDeviceLabel(
     selectedDeviceStatus?.lastCalibrationAction,
     "Waiting for the first setup action",
@@ -1101,6 +1121,7 @@ export default function ConnectWizard() {
     <AppShell
       currentPath="/connect"
       devices={devices}
+      isAdmin={isAdmin}
       isLoadingDevices={isLoadingDevices}
       selectedDeviceId={selectedDeviceId}
       onSelectDevice={(deviceId) => {
@@ -1167,7 +1188,7 @@ export default function ConnectWizard() {
             />
           </div>
 
-          <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="hidden">
             <SummaryCard
               label="Device"
               meta={displayedDeviceId || "Waiting for device"}
@@ -1210,10 +1231,29 @@ export default function ConnectWizard() {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="text-xs uppercase tracking-[0.24em] text-slate-400">
-                    Device Status
+                    Setup details
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">
-                    Check these details before troubleshooting remotely.
+                  <div className="mt-2 text-xl font-semibold text-white">
+                    {displayedDeviceLabel}
+                  </div>
+                  <div className="mt-2 wrap-anywhere font-mono text-sm text-cyan-100">
+                    {displayedDeviceId || "Waiting for device"}
+                  </div>
+                  <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-300">
+                    <span
+                      className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${
+                        requestedDeviceMissing
+                          ? "border-amber-300/20 bg-amber-300/10 text-amber-100"
+                          : getConnectivityClasses(selectedDeviceStatus)
+                      }`}
+                    >
+                      {connectionSummaryValue}
+                    </span>
+                    <span>Claim: {claimStateLabel}</span>
+                    <span>Firmware: {formatVersion(currentReportedFirmware)}</span>
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-slate-400">
+                    {connectionSummaryMeta}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-3">
@@ -1234,13 +1274,20 @@ export default function ConnectWizard() {
                       setIsDiagnosticsOpen((current) => !current);
                     }}
                   >
-                    {isDiagnosticsOpen ? "Hide details" : "Show details"}
+                    {isDiagnosticsOpen
+                      ? "Hide advanced details"
+                      : "Show advanced details"}
                   </button>
                 </div>
               </div>
 
               {isDiagnosticsOpen ? (
                 <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <SummaryCard
+                    label="Direction"
+                    meta="Saved on the device"
+                    value={reportedDirectionLabel}
+                  />
                   <SummaryCard
                     label="Registered board"
                     meta="Cloud registry"
@@ -1345,13 +1392,13 @@ export default function ConnectWizard() {
             </div>
           ) : null}
 
-          {selectedDeviceStatus?.online && !calibrationComplete && currentStepIndex >= 2 ? (
+          {selectedDeviceStatus?.online && !fullTravelReady && currentStepIndex >= 2 ? (
             <div className="mt-6 rounded-[1rem] border border-cyan-400/20 bg-cyan-400/10 p-5 text-cyan-100">
               <div className="text-xs uppercase tracking-[0.24em] text-cyan-100/80">
                 Calibration incomplete
               </div>
               <p className="mt-2 text-sm leading-7">
-                Finish safe calibration before running larger movement commands.
+                Save both the closed and open positions before running larger movement commands.
               </p>
             </div>
           ) : null}
@@ -1601,8 +1648,11 @@ export default function ConnectWizard() {
                     title="Safety"
                   />
                   <NoticeCard
-                    body={movementLockedReason ?? calibrationLastActionLabel}
-                    title={movementLockedReason ? "Current note" : "Last action"}
+                    body={
+                      movementLockedReason ??
+                      `Direction ${reportedDirectionLabel}. ${calibrationLastActionLabel}.`
+                    }
+                    title={movementLockedReason ? "Current note" : "Current setup"}
                   />
                 </div>
 
@@ -1664,11 +1714,35 @@ export default function ConnectWizard() {
                         disabled={isSendingCommand}
                         onClick={() => {
                           setCalibrationGuideStage("closed");
-                          setActionMessage("Direction looks correct. Set the closed position next.");
+                          setActionMessage(
+                            `Opening direction confirmed as ${reportedDirectionLabel.toLowerCase()}. Set the closed position next.`,
+                          );
                           setErrorMessage(null);
                         }}
                       >
-                        Correct
+                        Keep This Direction
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-xl border border-white/10 bg-white/5 px-5 py-4 text-base font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={isSendingCommand}
+                        onClick={() => {
+                          void (async () => {
+                            const wasSent = await sendCommand({
+                              type: "SET_DIRECTION_NORMAL",
+                            });
+
+                            if (wasSent) {
+                              setCalibrationGuideStage("direction");
+                              setActionMessage(
+                                "Direction set to normal. Press Nudge Open again and confirm it now opens the shutter.",
+                              );
+                              setErrorMessage(null);
+                            }
+                          })();
+                        }}
+                      >
+                        Set Normal
                       </button>
                       <button
                         type="button"
@@ -1676,15 +1750,21 @@ export default function ConnectWizard() {
                         disabled={isSendingCommand}
                         onClick={() => {
                           void (async () => {
-                            await sendCommand({ type: "STOP" });
-                            setActionMessage(null);
-                            setErrorMessage(
-                              "Direction looks wrong. Stop here and ask the operator to reverse direction before continuing.",
-                            );
+                            const wasSent = await sendCommand({
+                              type: "SET_DIRECTION_REVERSED",
+                            });
+
+                            if (wasSent) {
+                              setCalibrationGuideStage("direction");
+                              setActionMessage(
+                                "Direction set to reversed. Press Nudge Open again and confirm it now opens the shutter.",
+                              );
+                              setErrorMessage(null);
+                            }
                           })();
                         }}
                       >
-                        Wrong Way
+                        Set Reversed
                       </button>
                     </>
                   ) : null}
@@ -1693,6 +1773,19 @@ export default function ConnectWizard() {
                   calibrationGuideStage === "closed" &&
                   !showCompletedCalibrationState ? (
                     <>
+                      <button
+                        type="button"
+                        className="rounded-xl border border-cyan-300/25 bg-cyan-400/12 px-5 py-4 text-base font-semibold text-cyan-100 transition hover:bg-cyan-400/18 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={isSendingCommand}
+                        onClick={() => {
+                          void sendCommand({
+                            type: "NUDGE_CLOSE",
+                            amount: allowedMaxPercentStep,
+                          });
+                        }}
+                      >
+                        Move Closed More
+                      </button>
                       <button
                         type="button"
                         className="rounded-xl border border-white/10 bg-white/5 px-5 py-4 text-base font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1704,7 +1797,7 @@ export default function ConnectWizard() {
                           });
                         }}
                       >
-                        Nudge Close
+                        Fine Close
                       </button>
                       <button
                         type="button"
@@ -1717,7 +1810,7 @@ export default function ConnectWizard() {
                           });
                         }}
                       >
-                        Small Open
+                        Fine Open
                       </button>
                       <button
                         type="button"
@@ -1747,6 +1840,19 @@ export default function ConnectWizard() {
                     <>
                       <button
                         type="button"
+                        className="rounded-xl border border-cyan-300/25 bg-cyan-400/12 px-5 py-4 text-base font-semibold text-cyan-100 transition hover:bg-cyan-400/18 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={isSendingCommand}
+                        onClick={() => {
+                          void sendCommand({
+                            type: "NUDGE_OPEN",
+                            amount: allowedMaxPercentStep,
+                          });
+                        }}
+                      >
+                        Move Open More
+                      </button>
+                      <button
+                        type="button"
                         className="rounded-xl border border-white/10 bg-white/5 px-5 py-4 text-base font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-50"
                         disabled={isSendingCommand}
                         onClick={() => {
@@ -1756,7 +1862,7 @@ export default function ConnectWizard() {
                           });
                         }}
                       >
-                        Nudge Open
+                        Fine Open
                       </button>
                       <button
                         type="button"
@@ -1769,7 +1875,7 @@ export default function ConnectWizard() {
                           });
                         }}
                       >
-                        Small Close
+                        Fine Close
                       </button>
                       <button
                         type="button"
@@ -1960,11 +2066,11 @@ export default function ConnectWizard() {
                 </div>
 
                 <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-                  {MOVEMENT_SEQUENCE.map((step) => {
-                    const fullMoveBlocked =
-                      step.command.type === "SET_PERCENT" &&
-                      step.command.value === 100 &&
-                      !calibrationComplete;
+                    {MOVEMENT_SEQUENCE.map((step) => {
+                      const fullMoveBlocked =
+                        step.command.type === "SET_PERCENT" &&
+                        step.command.value === 100 &&
+                        !fullTravelReady;
 
                     return (
                       <button
@@ -1989,7 +2095,7 @@ export default function ConnectWizard() {
                 <p className="mt-4 text-sm leading-7 text-slate-400">
                   {canRunMotorTest
                     ? "Ready to test."
-                    : "Movement unlocks after calibration."}
+                    : "Movement unlocks after closed and open are both saved."}
                 </p>
               </div>
             ) : null}

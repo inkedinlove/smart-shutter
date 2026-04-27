@@ -139,6 +139,7 @@ export default function ProfilePage() {
   const {
     deviceRegistryError,
     devices,
+    isAdmin,
     isLoadingDevices,
     reloadDevices,
     selectedDeviceId,
@@ -250,6 +251,7 @@ export default function ProfilePage() {
     <AppShell
       currentPath="/profile"
       devices={devices}
+      isAdmin={isAdmin}
       isLoadingDevices={isLoadingDevices}
       selectedDeviceId={selectedDeviceId}
       onSelectDevice={(deviceId) => {

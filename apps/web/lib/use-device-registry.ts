@@ -13,7 +13,11 @@ import type { RegisteredDevice } from "@/lib/devices";
 const SELECTED_DEVICE_STORAGE_KEY = "smart-shutter:selected-device-id";
 
 type DevicesResponse = {
+  isAdmin?: boolean;
   defaultDeviceId: string;
+  profile?: {
+    role?: string;
+  };
   devices: RegisteredDevice[];
 };
 
@@ -25,6 +29,10 @@ function isDevicesResponse(value: unknown): value is DevicesResponse {
   return (
     isRecord(value) &&
     typeof value.defaultDeviceId === "string" &&
+    (typeof value.isAdmin === "boolean" ||
+      !isRecord(value.profile) ||
+      typeof value.profile.role === "string" ||
+      typeof value.profile.role === "undefined") &&
     Array.isArray(value.devices)
   );
 }
@@ -39,6 +47,7 @@ export function useDeviceRegistryWithOptions(options?: {
   const [devices, setDevices] = useState<RegisteredDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceIdState] = useState("");
   const [isLoadingDevices, setIsLoadingDevices] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [deviceRegistryError, setDeviceRegistryError] = useState<string | null>(
     null,
@@ -73,6 +82,9 @@ export function useDeviceRegistryWithOptions(options?: {
 
         startTransition(() => {
           setDevices(payload.devices);
+          setIsAdmin(
+            payload.isAdmin === true || payload.profile?.role === "admin",
+          );
           setSelectedDeviceIdState((currentDeviceId) => {
             const preferredDeviceId =
               currentDeviceId || storedDeviceId || payload.defaultDeviceId;
@@ -97,6 +109,7 @@ export function useDeviceRegistryWithOptions(options?: {
           } else {
             startTransition(() => {
               setDevices([]);
+              setIsAdmin(false);
               setSelectedDeviceIdState("");
               setDeviceRegistryError(null);
             });
@@ -143,6 +156,7 @@ export function useDeviceRegistryWithOptions(options?: {
   return {
     deviceRegistryError,
     devices,
+    isAdmin,
     isLoadingDevices,
     reloadDevices: () => {
       setReloadToken((current) => current + 1);

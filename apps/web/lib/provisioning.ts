@@ -21,6 +21,8 @@ export type ProvisioningDownloadInfo = {
   boardLabel: string;
   downloadPath: string;
   ideBoard: string;
+  recommendedFqbn: string;
+  boardOptionsNote?: string;
   mainSketchFile: string;
   sketchDirName: string;
 };
@@ -46,6 +48,8 @@ export function getProvisioningDownloadInfo(
       boardLabel: "ESP8266 D1-D4 Stepper",
       downloadPath: "/downloads/smart-shutter-esp8266-d1d4-sketch.zip",
       ideBoard: "NodeMCU 1.0 (ESP-12E Module)",
+      recommendedFqbn: "esp8266:esp8266:nodemcuv2:mmu=4816",
+      boardOptionsNote: "Set Tools -> MMU to `16KB cache + 48KB IRAM (IRAM)` for extra firmware headroom.",
       mainSketchFile: "esp8266-d1d4-shutter.ino",
       sketchDirName: "esp8266-d1d4-shutter",
     };
@@ -56,6 +60,7 @@ export function getProvisioningDownloadInfo(
       boardLabel: "ESP8266 Servo",
       downloadPath: "/downloads/smart-shutter-esp8266-servo-sketch.zip",
       ideBoard: "NodeMCU 1.0 (ESP-12E Module)",
+      recommendedFqbn: "esp8266:esp8266:nodemcuv2",
       mainSketchFile: "esp8266-servo-shutter.ino",
       sketchDirName: "esp8266-servo-shutter",
     };
@@ -66,6 +71,7 @@ export function getProvisioningDownloadInfo(
       boardLabel: "ESP8266",
       downloadPath: "/downloads/smart-shutter-esp8266-sketch.zip",
       ideBoard: "NodeMCU 1.0 (ESP-12E Module)",
+      recommendedFqbn: "esp8266:esp8266:nodemcuv2",
       mainSketchFile: "esp8266-shutter.ino",
       sketchDirName: "esp8266-shutter",
     };
@@ -75,6 +81,7 @@ export function getProvisioningDownloadInfo(
     boardLabel: "ESP32",
     downloadPath: "/downloads/smart-shutter-esp32-sketch.zip",
     ideBoard: "ESP32 Dev Module",
+    recommendedFqbn: "esp32:esp32:esp32",
     mainSketchFile: "esp32-shutter.ino",
     sketchDirName: "esp32-shutter",
   };
@@ -140,9 +147,9 @@ function buildEsp8266D1D4Config(input: ProvisionedConfigInput): string {
     in2: 4,
     in3: 0,
     in4: 2,
-    motorMaxSpeed: 360.0,
-    motorAcceleration: 140.0,
-    safeMotorMaxSpeed: 140.0,
+    motorMaxSpeed: 300.0,
+    motorAcceleration: 120.0,
+    safeMotorMaxSpeed: 180.0,
     safeMotorAcceleration: 70.0,
     otaEnabled: true,
   });
@@ -228,11 +235,11 @@ constexpr int IN2 = ${pinout.in2};
 constexpr int IN3 = ${pinout.in3};
 constexpr int IN4 = ${pinout.in4};
 
-constexpr long TRAVEL_STEPS = 2048;
+constexpr long TRAVEL_STEPS = 6180;
 constexpr float MOTOR_MAX_SPEED = ${pinout.motorMaxSpeed.toFixed(1)}f;
 constexpr float MOTOR_ACCELERATION = ${pinout.motorAcceleration.toFixed(1)}f;
 
-#define SAFE_ALLOWED_MAX_PERCENT_STEP 10
+#define SAFE_ALLOWED_MAX_PERCENT_STEP 20
 #define SAFE_DEFAULT_NUDGE_PERCENT 2
 #define SAFE_MOTOR_MAX_SPEED ${pinout.safeMotorMaxSpeed.toFixed(1)}f
 #define SAFE_MOTOR_ACCELERATION ${pinout.safeMotorAcceleration.toFixed(1)}f
@@ -452,6 +459,8 @@ export function buildProvisioningSummary(input: {
     `Sketch ZIP: ${downloadInfo.downloadPath}`,
     `Main sketch file: ${downloadInfo.mainSketchFile}`,
     `Recommended IDE board: ${downloadInfo.ideBoard}`,
+    `Recommended CLI FQBN: ${downloadInfo.recommendedFqbn}`,
+    ...(downloadInfo.boardOptionsNote ? [downloadInfo.boardOptionsNote] : []),
     `Command topic: ${input.device.commandTopic}`,
     `Status topic: ${input.device.statusTopic}`,
     wifiSummary,
@@ -482,11 +491,13 @@ export function buildProvisioningPackageReadme(input: {
     `Device: ${input.device.label}`,
     `Device ID: ${input.device.deviceId}`,
     `Board: ${downloadInfo.boardLabel}`,
-    ...(input.provisioningCode
-      ? [`Provisioning code: ${input.provisioningCode}`]
-      : []),
-    `Arduino IDE board: ${downloadInfo.ideBoard}`,
-    `Main sketch file: ${downloadInfo.sketchDirName}\\${downloadInfo.mainSketchFile}`,
+      ...(input.provisioningCode
+        ? [`Provisioning code: ${input.provisioningCode}`]
+        : []),
+      `Arduino IDE board: ${downloadInfo.ideBoard}`,
+      `Recommended CLI FQBN: ${downloadInfo.recommendedFqbn}`,
+      ...(downloadInfo.boardOptionsNote ? [downloadInfo.boardOptionsNote] : []),
+      `Main sketch file: ${downloadInfo.sketchDirName}\\${downloadInfo.mainSketchFile}`,
     "",
     "Package contents:",
     `- ${downloadInfo.sketchDirName}\\${downloadInfo.mainSketchFile}`,

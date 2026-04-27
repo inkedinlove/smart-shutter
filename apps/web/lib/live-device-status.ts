@@ -186,6 +186,8 @@ export function parseStatusMessage(
       otaLastError: parseOptionalString(parsed.otaLastError),
       otaTargetVersion: parseOptionalString(parsed.otaTargetVersion),
       calibrationComplete: parseOptionalBoolean(parsed.calibrationComplete),
+      fullTravelReady: parseOptionalBoolean(parsed.fullTravelReady),
+      directionInverted: parseOptionalBoolean(parsed.directionInverted),
       safetyMode: parseOptionalBoolean(parsed.safetyMode),
       allowedMaxPercentStep: parseOptionalNumber(parsed.allowedMaxPercentStep),
       lastCalibrationAction: parseOptionalString(parsed.lastCalibrationAction),

@@ -64,6 +64,7 @@ type Esp8266Guide = {
   compileCommand: string;
   compileAndUploadCommand: string;
   bootLogLine: string;
+  boardOptionNote?: string;
 };
 
 const ESP8266_BOARD_PROFILES = [
@@ -131,12 +132,14 @@ const ESP8266_MANUAL_GUIDES: Record<
     downloadPath: ESP8266_D1D4_DOWNLOAD_PATH,
     downloadLabel: "Download ESP8266 D1-D4 ZIP",
     details:
-      "Open `esp8266-d1d4-shutter.ino` after unzipping the package.",
+      "Open `esp8266-d1d4-shutter.ino` after unzipping the package, then set Tools -> MMU to `16KB cache + 48KB IRAM (IRAM)`.",
     compileCommand:
-      "powershell -ExecutionPolicy Bypass -File .\\scripts\\compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2 -SketchDir .\\firmware\\esp8266-d1d4-shutter -OutputDir .\\.arduino-build\\firmware\\esp8266-d1d4-shutter",
+      "powershell -ExecutionPolicy Bypass -File .\\scripts\\compile-firmware.ps1 -Fqbn esp8266:esp8266:nodemcuv2:mmu=4816 -SketchDir .\\firmware\\esp8266-d1d4-shutter -OutputDir .\\.arduino-build\\firmware\\esp8266-d1d4-shutter",
     compileAndUploadCommand:
-      "arduino-cli compile --upload -p COM7 --fqbn esp8266:esp8266:nodemcuv2 .\\firmware\\esp8266-d1d4-shutter",
+      "arduino-cli compile --upload -p COM7 --fqbn esp8266:esp8266:nodemcuv2:mmu=4816 .\\firmware\\esp8266-d1d4-shutter",
     bootLogLine: "Smart Shutter ESP8266 D1-D4 Stepper booting...",
+    boardOptionNote:
+      "Set Tools -> MMU to `16KB cache + 48KB IRAM (IRAM)` for the D1-D4 build so OTA and setup features have more headroom.",
   },
   "esp8266-servo": {
     board: "esp8266-servo",
@@ -178,6 +181,7 @@ function buildEsp8266ArduinoIdeSteps(guide: Esp8266Guide): string[] {
     "In `File -> Preferences`, add the ESP8266 board manager URL if it is missing.",
     `Open \`${guide.sketchDir}\\${guide.mainSketchFile}\` from this repo or from the downloaded ZIP.`,
     "Choose the closest board profile from the list below, then choose the COM port you found in Device Manager.",
+    ...(guide.boardOptionNote ? [guide.boardOptionNote] : []),
     "Click Verify, then Upload. If upload stalls, hold the board's BOOT or FLASH button while upload starts on some clones.",
     `After upload, open Serial Monitor at \`115200\` and look for \`${guide.bootLogLine}\`.`,
   ];
@@ -222,6 +226,7 @@ const MANUAL_DOWNLOADS = [
 export default function FlashPage() {
   const {
     devices,
+    isAdmin,
     isLoadingDevices,
     selectedDevice,
     selectedDeviceId,
@@ -240,6 +245,7 @@ export default function FlashPage() {
     <AppShell
       currentPath="/flash"
       devices={devices}
+      isAdmin={isAdmin}
       isLoadingDevices={isLoadingDevices}
       selectedDeviceId={selectedDeviceId}
       onSelectDevice={setSelectedDeviceId}

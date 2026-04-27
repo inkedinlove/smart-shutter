@@ -392,8 +392,6 @@ export const authOptions: NextAuthOptions = {
             dbUser.profile?.displayName ??
             null;
           token.email = token.email ?? dbUser.email ?? null;
-
-          return token;
         }
       }
 

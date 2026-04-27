@@ -126,8 +126,9 @@ $esp8266D1D4Zip = New-FirmwarePackage `
     "2. Install the 'esp8266 by ESP8266 Community' board package.",
     "3. Open esp8266-d1d4-shutter\esp8266-d1d4-shutter.ino.",
     "4. Use: NodeMCU 1.0 (ESP-12E Module), or the closest ESP8266 board match.",
-    "5. This package is for the known-good D1/D2/D3/D4 ULN2003 wiring profile.",
-    "6. Upload, then watch Serial Monitor at 115200.",
+    "5. Set Tools -> MMU to: 16KB cache + 48KB IRAM (IRAM).",
+    "6. This package is for the known-good D1/D2/D3/D4 ULN2003 wiring profile.",
+    "7. Upload, then watch Serial Monitor at 115200.",
     "",
     "Site help:",
     "- Open /flash on Smart Shutter for the latest recovery steps."

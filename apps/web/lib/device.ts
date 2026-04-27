@@ -82,6 +82,8 @@ export type DeviceCommand =
       type:
         | "SET_CURRENT_AS_CLOSED"
         | "SET_CURRENT_AS_OPEN"
+        | "SET_DIRECTION_NORMAL"
+        | "SET_DIRECTION_REVERSED"
         | "MARK_CALIBRATION_COMPLETE"
         | "LOCK_MOVEMENT"
         | "UNLOCK_MOVEMENT";
@@ -113,6 +115,8 @@ export type DeviceCommandInput =
       type:
         | "SET_CURRENT_AS_CLOSED"
         | "SET_CURRENT_AS_OPEN"
+        | "SET_DIRECTION_NORMAL"
+        | "SET_DIRECTION_REVERSED"
         | "MARK_CALIBRATION_COMPLETE"
         | "LOCK_MOVEMENT"
         | "UNLOCK_MOVEMENT";
@@ -141,6 +145,8 @@ export type DeviceStatus = {
   otaLastError?: string;
   otaTargetVersion?: string;
   calibrationComplete?: boolean;
+  fullTravelReady?: boolean;
+  directionInverted?: boolean;
   safetyMode?: boolean;
   allowedMaxPercentStep?: number;
   lastCalibrationAction?: string;
@@ -328,6 +334,8 @@ export function createDefaultDeviceStatus(
     otaLastError: undefined,
     otaTargetVersion: undefined,
     calibrationComplete: undefined,
+    fullTravelReady: undefined,
+    directionInverted: undefined,
     safetyMode: undefined,
     allowedMaxPercentStep: undefined,
     lastCalibrationAction: undefined,

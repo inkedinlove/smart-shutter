@@ -224,6 +224,8 @@ export async function POST(request: Request) {
   } else if (
     commandType === "SET_CURRENT_AS_CLOSED" ||
     commandType === "SET_CURRENT_AS_OPEN" ||
+    commandType === "SET_DIRECTION_NORMAL" ||
+    commandType === "SET_DIRECTION_REVERSED" ||
     commandType === "MARK_CALIBRATION_COMPLETE" ||
     commandType === "LOCK_MOVEMENT" ||
     commandType === "UNLOCK_MOVEMENT"
@@ -248,7 +250,7 @@ export async function POST(request: Request) {
 
     const normalizedValue = Math.round(value);
 
-    if (liveStatus?.safetyMode === true && liveStatus.calibrationComplete !== true) {
+    if (liveStatus?.safetyMode === true && liveStatus.fullTravelReady !== true) {
       if (normalizedValue === 100) {
         await auditCommand({
           deviceId: device.deviceId,
@@ -259,7 +261,7 @@ export async function POST(request: Request) {
         });
 
         return apiError(
-          "100% is blocked until safe calibration is complete on the attached shutter.",
+          "100% is blocked until closed and open are both saved on the attached shutter.",
           409,
         );
       }
@@ -291,7 +293,7 @@ export async function POST(request: Request) {
         });
 
         return apiError(
-          `Safe setup mode only allows moves up to ${allowedMaxPercentStep}% per command until calibration is complete.`,
+          `Safe setup mode only allows moves up to ${allowedMaxPercentStep}% per command until closed and open are both saved.`,
           409,
         );
       }
@@ -307,7 +309,7 @@ export async function POST(request: Request) {
     };
   } else {
     return apiError(
-      "The `type` field must be one of `SET_PERCENT`, `STOP`, `CHECK_UPDATE`, `NUDGE_OPEN`, `NUDGE_CLOSE`, `SET_CURRENT_AS_CLOSED`, `SET_CURRENT_AS_OPEN`, `MARK_CALIBRATION_COMPLETE`, `LOCK_MOVEMENT`, or `UNLOCK_MOVEMENT`.",
+      "The `type` field must be one of `SET_PERCENT`, `STOP`, `CHECK_UPDATE`, `NUDGE_OPEN`, `NUDGE_CLOSE`, `SET_CURRENT_AS_CLOSED`, `SET_CURRENT_AS_OPEN`, `SET_DIRECTION_NORMAL`, `SET_DIRECTION_REVERSED`, `MARK_CALIBRATION_COMPLETE`, `LOCK_MOVEMENT`, or `UNLOCK_MOVEMENT`.",
       400,
     );
   }

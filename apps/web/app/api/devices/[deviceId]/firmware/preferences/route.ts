@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import { AccessControlError, getAuthorizedDevice } from "@/lib/access-control";
 import { apiError, apiOk } from "@/lib/api-response";
 import { getDb, isDatabaseConfigured } from "@/lib/db";
@@ -132,6 +134,17 @@ export async function PATCH(request: Request, context: RouteContext) {
     );
   } catch (error) {
     console.error("Unable to save device auto-update preferences:", error);
+
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === "P2021" || error.code === "P2022")
+    ) {
+      return apiError(
+        "Auto-update preferences need the latest database migration. Run `npm run db:deploy`, redeploy, and try again.",
+        503,
+      );
+    }
+
     return apiError("Unable to save auto-update preferences right now.", 503);
   }
 }

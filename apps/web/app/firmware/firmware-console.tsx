@@ -230,6 +230,7 @@ export default function FirmwareConsole() {
   const {
     deviceRegistryError,
     devices,
+    isAdmin,
     isLoadingDevices,
     reloadDevices,
     selectedDevice,
@@ -551,7 +552,10 @@ export default function FirmwareConsole() {
       : "Check/install on device";
   const activeErrorMessage = errorMessage ?? deviceRegistryError;
   const activeErrorNextAction = activeErrorMessage
-    ? activeErrorMessage.toLowerCase().includes("offline")
+    ? activeErrorMessage.toLowerCase().includes("db:deploy") ||
+      activeErrorMessage.toLowerCase().includes("migration")
+      ? "Run the latest database migration, redeploy, and try saving the setting again."
+      : activeErrorMessage.toLowerCase().includes("offline")
       ? "Check power and Wi-Fi, then try again."
       : activeErrorMessage.toLowerCase().includes("status")
         ? "Wait a moment, then check the device again."
@@ -571,6 +575,7 @@ export default function FirmwareConsole() {
     <AppShell
       currentPath="/firmware"
       devices={devices}
+      isAdmin={isAdmin}
       isLoadingDevices={isLoadingDevices}
       selectedDeviceId={selectedDeviceId}
       onSelectDevice={(deviceId) => {

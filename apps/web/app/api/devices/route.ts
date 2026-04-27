@@ -1,6 +1,7 @@
 import {
   AccessControlError,
   getDefaultAccessibleDeviceId,
+  isAdminSession,
   listAccessibleDevices,
 } from "@/lib/access-control";
 import { apiError, apiOk } from "@/lib/api-response";
@@ -20,7 +21,13 @@ export async function GET() {
           profileId: context.profile.profileId,
           displayName: context.profile.displayName,
           email: context.profile.email,
+          role:
+            context.mode === "internal"
+              ? "admin"
+              : context.session?.user?.role ?? "customer",
         },
+        isAdmin:
+          context.mode === "internal" || isAdminSession(context.session),
         defaultDeviceId,
         devices,
       },

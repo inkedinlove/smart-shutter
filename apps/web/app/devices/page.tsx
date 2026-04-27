@@ -152,6 +152,7 @@ export default function DevicesPage() {
   const {
     deviceRegistryError,
     devices,
+    isAdmin,
     isLoadingDevices,
     reloadDevices,
     selectedDeviceId,
@@ -316,6 +317,7 @@ export default function DevicesPage() {
     <AppShell
       currentPath="/devices"
       devices={devices}
+      isAdmin={isAdmin}
       isLoadingDevices={isLoadingDevices}
       selectedDeviceId={selectedDeviceId}
       onSelectDevice={(deviceId) => {
