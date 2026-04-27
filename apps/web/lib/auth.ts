@@ -25,6 +25,92 @@ import {
 import { isInternalTestMode } from "@/lib/runtime-mode";
 import { normalizeEmail, syncOAuthUserAccount } from "@/lib/user-accounts";
 
+function normalizePublicBaseUrl(value: string | undefined): string {
+  const normalized = value?.trim() ?? "";
+  return normalized.replace(/\/+$/, "");
+}
+
+function ensureNextAuthBaseUrlFromPublicBaseUrl() {
+  const normalizedBaseUrl = normalizePublicBaseUrl(
+    process.env.PUBLIC_APP_BASE_URL,
+  );
+
+  if (!normalizedBaseUrl) {
+    return;
+  }
+
+  if (!process.env.NEXTAUTH_URL?.trim()) {
+    process.env.NEXTAUTH_URL = normalizedBaseUrl;
+  }
+
+  if (!process.env.NEXTAUTH_URL_INTERNAL?.trim()) {
+    process.env.NEXTAUTH_URL_INTERNAL = normalizedBaseUrl;
+  }
+}
+
+function isSensitiveAuthLogKey(key: string): boolean {
+  return [
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "client_secret",
+    "clientSecret",
+    "authorization",
+  ].includes(key);
+}
+
+function sanitizeAuthLogMetadata(value: unknown, depth = 0): unknown {
+  if (depth > 3) {
+    return "[truncated]";
+  }
+
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeAuthLogMetadata(entry, depth + 1));
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [
+        key,
+        isSensitiveAuthLogKey(key)
+          ? "[redacted]"
+          : sanitizeAuthLogMetadata(entryValue, depth + 1),
+      ]),
+    );
+  }
+
+  return value;
+}
+
+function createAuthLogger(): NonNullable<NextAuthOptions["logger"]> {
+  return {
+    error(code, metadata) {
+      console.error(`[NextAuth] ${code}`, sanitizeAuthLogMetadata(metadata));
+    },
+    warn(code) {
+      console.warn(`[NextAuth] ${code}`);
+    },
+    debug(code, metadata) {
+      if (
+        process.env.NODE_ENV !== "production" ||
+        process.env.AUTH_DEBUG?.trim() === "true"
+      ) {
+        console.debug(`[NextAuth] ${code}`, sanitizeAuthLogMetadata(metadata));
+      }
+    },
+  };
+}
+
+ensureNextAuthBaseUrlFromPublicBaseUrl();
+
 function getAdapter(): Adapter | undefined {
   const db = getDb();
 
@@ -232,6 +318,8 @@ function buildAuthSignInRateLimitKey(input: {
 
 export const authOptions: NextAuthOptions = {
   adapter: getAdapter(),
+  debug: process.env.AUTH_DEBUG?.trim() === "true",
+  logger: createAuthLogger(),
   session: {
     strategy: "jwt",
     maxAge: AUTH_SESSION_MAX_AGE_SECONDS,
