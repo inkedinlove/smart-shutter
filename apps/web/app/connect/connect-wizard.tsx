@@ -281,7 +281,7 @@ function getDeviceHealth(status: DeviceStatus | null, otaState: OtaState | null)
     };
   }
 
-  if (!status.online || status.deviceMode === "ERROR" || otaState === "FAILED") {
+  if (!status.online || status.deviceMode === "ERROR") {
     return {
       label: "Needs attention",
       tone: "warning" as const,
@@ -1340,8 +1340,23 @@ export default function ConnectWizard() {
                   />
                   <SummaryCard
                     label="Firmware"
-                    meta={`OTA ${diagnosticsSnapshot?.otaState ?? "Unknown"}`}
+                    meta={
+                      diagnosticsSnapshot?.otaState
+                        ? `OTA ${diagnosticsSnapshot.otaState}`
+                        : "OTA status unavailable"
+                    }
                     value={formatVersion(diagnosticsSnapshot?.firmwareVersion)}
+                  />
+                  <SummaryCard
+                    label="OTA"
+                    meta="Updater status"
+                    value={
+                      diagnosticsSnapshot?.otaLastError?.trim()
+                        ? diagnosticsSnapshot.otaLastError
+                        : diagnosticsSnapshot?.otaState
+                          ? diagnosticsSnapshot.otaState.replace(/_/g, " ")
+                          : "Unknown"
+                    }
                   />
                   <SummaryCard
                     label="Setup mode"

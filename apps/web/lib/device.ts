@@ -171,6 +171,7 @@ export type DeviceDiagnostics = {
   safetyMode: boolean | null;
   calibrationComplete: boolean | null;
   otaState: OtaState | null;
+  otaLastError: string | null;
   wifiConnected: boolean | null;
   mqttConnected: boolean | null;
   rssi: number | null;
@@ -373,6 +374,7 @@ export function createDeviceDiagnostics(
     calibrationComplete: status?.calibrationComplete ?? null,
     otaState:
       status?.otaState ?? (status?.otaEnabled === false ? "DISABLED" : null),
+    otaLastError: status?.otaLastError ?? null,
     wifiConnected: status?.wifiConnected ?? null,
     mqttConnected: status?.mqttConnected ?? null,
     rssi: status?.rssi ?? null,

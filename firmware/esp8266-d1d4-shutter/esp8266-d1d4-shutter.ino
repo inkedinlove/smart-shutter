@@ -760,6 +760,9 @@ size_t buildStatusPayload(
   reportedCapabilities.add("calibration");
   reportedCapabilities.add("movement_lock");
   reportedCapabilities.add("factory_setup_ap");
+  if (ENABLE_OTA_UPDATES) {
+    reportedCapabilities.add("ota");
+  }
   statusDoc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
   statusDoc["mqttConnected"] = mqttClient.connected();
   if (WiFi.status() == WL_CONNECTED) {
@@ -1696,6 +1699,15 @@ bool checkForUpdate(bool autoCheck) {
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("OTA check failed: WiFi is not connected.");
+    if (autoCheck) {
+      reportUpdateEvent(
+        "update_not_available",
+        FIRMWARE_VERSION,
+        FIRMWARE_VERSION,
+        "Auto-check skipped because WiFi is not connected"
+      );
+      return false;
+    }
     setOtaState(OTA_STATE_FAILED, "", "WiFi not connected");
     reportUpdateEvent(
       "update_failed",
@@ -1708,6 +1720,15 @@ bool checkForUpdate(bool autoCheck) {
 
   if (isMoving()) {
     Serial.println("OTA check refused: motor is moving.");
+    if (autoCheck) {
+      reportUpdateEvent(
+        "update_blocked_motor_moving",
+        FIRMWARE_VERSION,
+        FIRMWARE_VERSION,
+        "Auto-check skipped because the motor is moving"
+      );
+      return false;
+    }
     setOtaState(OTA_STATE_FAILED, "", "Motor is moving");
     reportUpdateEvent(
       "update_blocked_motor_moving",
