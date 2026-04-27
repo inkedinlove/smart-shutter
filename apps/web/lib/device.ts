@@ -42,7 +42,7 @@ export const DEVICE_ACTUATOR_TYPE_VALUES = ["stepper", "servo"] as const;
 export type DeviceActuatorType = (typeof DEVICE_ACTUATOR_TYPE_VALUES)[number];
 
 export const DEFAULT_NUDGE_AMOUNT = 2;
-export const MAX_NUDGE_AMOUNT = 10;
+export const MAX_NUDGE_AMOUNT = 100;
 export const DEFAULT_SAFE_ALLOWED_MAX_PERCENT_STEP = 10;
 
 export type DeviceCommand =

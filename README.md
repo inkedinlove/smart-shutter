@@ -37,7 +37,7 @@ followed by the first attached-shutter calibration pass with
 - `apps/web`: Next.js App Router dashboard, login/profile/devices pages, setup console, firmware console, API routes for publishing commands and reading retained device status over MQTT, Auth.js-based account access, and a Prisma/Neon-ready database layer with explicit internal fallback mode.
 - `firmware/esp32-shutter`: ESP32 Arduino sketch for the main browser-flash and recovery path.
 - `firmware/esp8266-shutter`: ESP8266 Arduino sketch that keeps the same MQTT/status contract for NodeMCU-style boards that need manual USB flashing.
-- `docs`: wiring, internal setup notes, MVP testing notes, provisioning notes, firmware update notes, and comparison notes for the older ESP8266 prototype.
+- `docs`: wiring, internal setup notes, MVP testing notes, provisioning notes, firmware update notes, planned pro-integration notes like the ESP32 Lutron connector MVP, and comparison notes for the older ESP8266 prototype.
 
 Current MQTT flow:
 
@@ -224,6 +224,7 @@ Security references:
 - [docs/security-audit.md](docs/security-audit.md)
 - [docs/security-hardening-checklist.md](docs/security-hardening-checklist.md)
 - [docs/security-boundaries.md](docs/security-boundaries.md)
+- [docs/esp32-lutron-connector-mvp.md](docs/esp32-lutron-connector-mvp.md)
 
 ## Vercel Deployment
 
