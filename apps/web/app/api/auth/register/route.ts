@@ -1,5 +1,10 @@
 import { apiError, apiOk } from "@/lib/api-response";
 import {
+  EmailVerificationError,
+  isEmailVerificationDeliveryReady,
+  sendEmailVerification,
+} from "@/lib/email-verification";
+import {
   assertRateLimit,
   buildRateLimitKey,
   clearRateLimit,
@@ -24,6 +29,10 @@ export const runtime = "nodejs";
 function sanitizeRegistrationError(error: UserAccountError): string {
   if (error.statusCode === 409) {
     return "We couldn't create the account. Try signing in if you've used this email before.";
+  }
+
+  if (error.statusCode === 503) {
+    return "Account verification email is not configured yet. Try again later.";
   }
 
   if (error.statusCode >= 500) {
@@ -78,11 +87,33 @@ export async function POST(request: Request) {
         "Too many account creation attempts. Wait a few minutes, then try again.",
     });
 
+    if (!isEmailVerificationDeliveryReady(request)) {
+      return apiError(
+        "Account verification email is not configured yet. Try again later.",
+        503,
+      );
+    }
+
     const account = await createUserAccount({
       displayName,
       email,
       password,
     });
+    let verificationEmailSent = false;
+
+    try {
+      verificationEmailSent = await sendEmailVerification({
+        email: account.email,
+        displayName: account.displayName,
+        request,
+      });
+    } catch (error) {
+      if (error instanceof EmailVerificationError) {
+        console.error("Unable to send verification email:", error.message);
+      } else {
+        console.error("Unable to send verification email:", error);
+      }
+    }
 
     clearRateLimit({
       bucket: "auth-register",
@@ -95,6 +126,10 @@ export async function POST(request: Request) {
           displayName: account.displayName,
           email: account.email,
           role: account.role,
+        },
+        emailVerification: {
+          required: account.emailVerificationRequired,
+          sent: verificationEmailSent,
         },
       },
       {

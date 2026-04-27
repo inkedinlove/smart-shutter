@@ -13,6 +13,7 @@ import { buildZipArchive } from "@/lib/zip";
 type ProvisioningPackageInput = {
   configText: string;
   device: RegisteredDevice;
+  provisioningCode?: string | null;
   wifiMode: ProvisioningWifiMode;
   wifiSsid: string;
 };
@@ -75,6 +76,7 @@ export async function buildProvisioningPackage(input: ProvisioningPackageInput):
   );
   const readmeText = buildProvisioningPackageReadme({
     device: input.device,
+    provisioningCode: input.provisioningCode,
     wifiMode: input.wifiMode,
     wifiSsid: input.wifiSsid,
   });

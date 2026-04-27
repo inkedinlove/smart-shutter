@@ -13,6 +13,8 @@ Current hardening:
 - Customer routes require a valid Auth.js session when
   `INTERNAL_TEST_MODE=false`.
 - Auth sessions use JWT strategy with secure cookies enabled in production.
+- Active session records are mirrored into the Prisma `Session` table for
+  visibility and audit without breaking Credentials-provider support.
 - Sign-in failures stay generic in the UI.
 - Registration now avoids exposing duplicate-account details verbatim.
 
@@ -75,6 +77,10 @@ Current hardening:
   `/firmware/releases`, firmware release publishing, claim creation, device
   registration, and provisioning helpers.
 - Admin mutation routes are rate-limited.
+- Provisioning package/config generation is now recorded in Prisma
+  `ProvisioningSession` rows with actor attribution when an admin session is
+  used.
+- Provisioning tracking does not store customer WiFi passwords.
 
 Residual gaps:
 

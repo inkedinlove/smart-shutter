@@ -103,14 +103,33 @@ function isRegisterResponseData(
     email: string;
     role: string;
   };
+  emailVerification: {
+    required: boolean;
+    sent: boolean;
+  };
 } {
   return (
     isRecord(value) &&
     isRecord(value.account) &&
     typeof value.account.displayName === "string" &&
     typeof value.account.email === "string" &&
-    typeof value.account.role === "string"
+    typeof value.account.role === "string" &&
+    isRecord(value.emailVerification) &&
+    typeof value.emailVerification.required === "boolean" &&
+    typeof value.emailVerification.sent === "boolean"
   );
+}
+
+function isVerificationRequestResponse(
+  value: unknown,
+): value is {
+  email: string;
+} {
+  return isRecord(value) && typeof value.email === "string";
+}
+
+function isVerificationRequiredMessage(message: string | null): boolean {
+  return typeof message === "string" && /verify your email/i.test(message);
 }
 
 function LoginContent() {
@@ -123,17 +142,23 @@ function LoginContent() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pendingOAuthProviderId, setPendingOAuthProviderId] =
     useState<OAuthProviderId | null>(null);
+  const [isSendingVerificationEmail, setIsSendingVerificationEmail] =
+    useState(false);
   const [oauthProviders, setOauthProviders] = useState<
     Array<ClientSafeProvider & { id: OAuthProviderId }>
   >([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [nextActionMessage, setNextActionMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [infoDetailMessage, setInfoDetailMessage] = useState<string | null>(null);
 
   const callbackUrl = useMemo(
     () => searchParams.get("callbackUrl") || "/devices",
     [searchParams],
   );
   const expiredReason = searchParams.get("reason") === "session-expired";
+  const verifiedReason = searchParams.get("verified") === "1";
+  const prefilledEmail = searchParams.get("email") ?? "";
   const providerErrorMessage = useMemo(
     () => normalizeAuthProviderErrorMessage(searchParams.get("error")),
     [searchParams],
@@ -145,7 +170,35 @@ function LoginContent() {
       : providerErrorMessage
         ? "Try again, or use a different sign-in option if you already have one set up."
         : null;
+  const shouldShowResendVerificationAction =
+    !!email.trim() &&
+    (isVerificationRequiredMessage(activeErrorMessage) ||
+      isVerificationRequiredMessage(infoMessage));
   const isBusy = isSubmitting || pendingOAuthProviderId !== null;
+
+  useEffect(() => {
+    if (!prefilledEmail) {
+      return;
+    }
+
+    startTransition(() => {
+      setEmail(prefilledEmail);
+    });
+  }, [prefilledEmail]);
+
+  useEffect(() => {
+    if (!verifiedReason) {
+      return;
+    }
+
+    startTransition(() => {
+      setMode("signin");
+      setInfoMessage("Your email is verified. You can sign in now.");
+      setInfoDetailMessage("Use the same email and password you created earlier.");
+      setErrorMessage(null);
+      setNextActionMessage(null);
+    });
+  }, [verifiedReason]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -220,12 +273,11 @@ function LoginContent() {
       }),
       timeoutMessage: "Creating your account timed out.",
     });
-    await readApiData(
+    return readApiData(
       response,
       isRegisterResponseData,
       "Unable to create your account.",
     );
-    await handleSignIn();
   }
 
   async function handleOAuthSignIn(providerId: OAuthProviderId) {
@@ -259,15 +311,85 @@ function LoginContent() {
     }
   }
 
+  async function handleResendVerificationEmail() {
+    if (!email.trim()) {
+      return;
+    }
+
+    setIsSendingVerificationEmail(true);
+    setErrorMessage(null);
+    setNextActionMessage(null);
+    setInfoMessage(null);
+    setInfoDetailMessage(null);
+
+    try {
+      const response = await fetchWithShortTimeout(
+        "/api/auth/verify-email/request",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email,
+          }),
+          timeoutMessage: "Sending the verification email timed out.",
+        },
+      );
+      await readApiData(
+        response,
+        isVerificationRequestResponse,
+        "Unable to send verification email.",
+      );
+
+      startTransition(() => {
+        setInfoMessage("Verification email sent.");
+        setInfoDetailMessage(
+          "Check your inbox for a fresh Smart Shutter verification link.",
+        );
+      });
+    } catch (error) {
+      startTransition(() => {
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : "Unable to send verification email.",
+        );
+        setNextActionMessage(
+          "Double-check the email address, then try again in a moment.",
+        );
+      });
+    } finally {
+      setIsSendingVerificationEmail(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSubmitting(true);
     setErrorMessage(null);
     setNextActionMessage(null);
+    setInfoMessage(null);
+    setInfoDetailMessage(null);
 
     try {
       if (mode === "register") {
-        await handleRegister();
+        const registration = await handleRegister();
+
+        startTransition(() => {
+          setMode("signin");
+          setPassword("");
+          setInfoMessage(
+            registration.emailVerification.sent
+              ? "Account created. Check your email to verify your account."
+              : "Account created. We couldn't send the verification email automatically.",
+          );
+          setInfoDetailMessage(
+            registration.emailVerification.sent
+              ? "Use the link in that email before signing in."
+              : "Use the resend option below after SMTP is ready, then verify your email before signing in.",
+          );
+        });
       } else {
         await handleSignIn();
       }
@@ -342,6 +464,8 @@ function LoginContent() {
                 setMode("signin");
                 setErrorMessage(null);
                 setNextActionMessage(null);
+                setInfoMessage(null);
+                setInfoDetailMessage(null);
               }}
             >
               Sign in
@@ -357,6 +481,8 @@ function LoginContent() {
                 setMode("register");
                 setErrorMessage(null);
                 setNextActionMessage(null);
+                setInfoMessage(null);
+                setInfoDetailMessage(null);
               }}
             >
               Create account
@@ -460,6 +586,43 @@ function LoginContent() {
                 <div className="mt-1 text-amber-100/90">
                   {activeNextActionMessage}
                 </div>
+              ) : null}
+              {shouldShowResendVerificationAction ? (
+                <button
+                  className="mt-3 inline-flex items-center justify-center rounded-lg border border-amber-200/25 bg-amber-200/10 px-3 py-2 text-sm font-semibold text-amber-50 transition hover:bg-amber-200/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSendingVerificationEmail}
+                  type="button"
+                  onClick={() => {
+                    void handleResendVerificationEmail();
+                  }}
+                >
+                  {isSendingVerificationEmail
+                    ? "Sending verification email..."
+                    : "Resend verification email"}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {!activeErrorMessage && infoMessage ? (
+            <div className="mt-4 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">
+              <div className="font-semibold text-white">{infoMessage}</div>
+              {infoDetailMessage ? (
+                <div className="mt-1 text-cyan-100/90">{infoDetailMessage}</div>
+              ) : null}
+              {shouldShowResendVerificationAction ? (
+                <button
+                  className="mt-3 inline-flex items-center justify-center rounded-lg border border-cyan-200/25 bg-cyan-200/10 px-3 py-2 text-sm font-semibold text-cyan-50 transition hover:bg-cyan-200/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSendingVerificationEmail}
+                  type="button"
+                  onClick={() => {
+                    void handleResendVerificationEmail();
+                  }}
+                >
+                  {isSendingVerificationEmail
+                    ? "Sending verification email..."
+                    : "Resend verification email"}
+                </button>
               ) : null}
             </div>
           ) : null}

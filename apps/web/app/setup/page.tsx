@@ -9,6 +9,7 @@ import {
   listAvailableDevices,
 } from "@/lib/device-registry";
 import { getPublicMqttConfig } from "@/lib/mqtt";
+import { listRecentProvisioningSessions } from "@/lib/provisioning-sessions";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,7 @@ export default async function SetupPage() {
   const devices = await listAvailableDevices();
   const broker = getPublicMqttConfig();
   const defaultDeviceId = await getDefaultRegisteredDeviceId();
+  const provisioningSessions = await listRecentProvisioningSessions(12);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-[92rem] flex-col gap-5 px-4 py-4 sm:px-6 sm:py-5 lg:px-8">
@@ -99,6 +101,95 @@ export default async function SetupPage() {
         defaultDeviceId={defaultDeviceId}
         devices={devices}
       />
+
+      <section className="dashboard-panel rounded-[1.2rem] p-6 sm:p-8">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-100">
+              Recent provisioning activity
+            </div>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
+              Smart Shutter now records generated provisioning artifacts in the
+              database so internal setup work is attributable and easier to
+              audit later. WiFi passwords are not stored here.
+            </p>
+          </div>
+        </div>
+
+        {provisioningSessions.length > 0 ? (
+          <div className="mt-6 overflow-x-auto rounded-[1rem] border border-white/10 bg-black/20">
+            <table className="min-w-full divide-y divide-white/10 text-left text-sm text-slate-200">
+              <thead className="bg-white/5 text-xs uppercase tracking-[0.22em] text-slate-400">
+                <tr>
+                  <th className="px-4 py-3 font-medium">When</th>
+                  <th className="px-4 py-3 font-medium">Device</th>
+                  <th className="px-4 py-3 font-medium">Artifact</th>
+                  <th className="px-4 py-3 font-medium">Tracking code</th>
+                  <th className="px-4 py-3 font-medium">WiFi mode</th>
+                  <th className="px-4 py-3 font-medium">Created by</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                {provisioningSessions.map((session) => (
+                  <tr key={session.sessionId}>
+                    <td className="px-4 py-3 align-top text-slate-300">
+                      {formatTimestamp(session.createdAt)}
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      <div className="font-semibold text-white">
+                        {session.deviceLabel ?? session.deviceId ?? "Unknown device"}
+                      </div>
+                      <div className="mt-1 font-mono text-xs text-slate-400">
+                        {session.deviceId ?? "Unattached"}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 align-top text-slate-300">
+                      <div>{session.artifactType}</div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        {session.board}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 align-top font-mono text-cyan-100">
+                      {session.pairingCode}
+                    </td>
+                    <td className="px-4 py-3 align-top text-slate-300">
+                      <div>{session.wifiMode}</div>
+                      {session.wifiSsidHint ? (
+                        <div className="mt-1 text-xs text-slate-400">
+                          SSID hint: {session.wifiSsidHint}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3 align-top text-slate-300">
+                      {session.createdBy.displayName
+                        ? session.createdBy.displayName
+                        : session.createdBy.authMode === "token"
+                          ? "Admin token"
+                          : "Internal admin"}
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      <div className="font-semibold text-white">{session.status}</div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        Expires {formatTimestamp(session.expiresAt)}
+                      </div>
+                      {session.completedAt ? (
+                        <div className="mt-1 text-xs text-emerald-300">
+                          Completed {formatTimestamp(session.completedAt)}
+                        </div>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="mt-6 rounded-[1rem] border border-dashed border-white/10 bg-white/5 p-5 text-sm text-slate-400">
+            No provisioning sessions have been recorded yet on this deployment.
+          </div>
+        )}
+      </section>
 
       <section className="dashboard-panel rounded-[1.2rem] border border-amber-300/20 bg-amber-300/8 p-6 sm:p-8">
           <div className="text-xs font-semibold uppercase tracking-[0.3em] text-amber-100">

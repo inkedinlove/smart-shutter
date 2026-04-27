@@ -1,6 +1,7 @@
 import { apiOk } from "@/lib/api-response";
 import { getDb, isDatabaseConfigured } from "@/lib/db";
 import { listAvailableDevices } from "@/lib/device-registry";
+import { isMailConfigured } from "@/lib/mailer";
 import { getLatestFirmwareRelease } from "@/lib/firmware-releases";
 import { isMqttConfigured } from "@/lib/mqtt";
 import { RATE_LIMITING_MODE } from "@/lib/rate-limit";
@@ -48,6 +49,7 @@ export async function GET() {
   return apiOk(
     {
       mqttConfigured: isMqttConfigured(),
+      mailConfigured: isMailConfigured(),
       databaseMode,
       runtimeMode: runtimeValidation.internalTestMode ? "internal" : "customer",
       productionConfigReady: runtimeValidation.productionReady,

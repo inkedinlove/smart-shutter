@@ -462,6 +462,7 @@ export function buildProvisioningPackageReadme(input: {
   device: RegisteredDevice;
   wifiMode: ProvisioningWifiMode;
   wifiSsid: string;
+  provisioningCode?: string | null;
 }): string {
   const downloadInfo = getProvisioningDownloadInfo(input.device.board);
   const wifiInstructions =
@@ -481,6 +482,9 @@ export function buildProvisioningPackageReadme(input: {
     `Device: ${input.device.label}`,
     `Device ID: ${input.device.deviceId}`,
     `Board: ${downloadInfo.boardLabel}`,
+    ...(input.provisioningCode
+      ? [`Provisioning code: ${input.provisioningCode}`]
+      : []),
     `Arduino IDE board: ${downloadInfo.ideBoard}`,
     `Main sketch file: ${downloadInfo.sketchDirName}\\${downloadInfo.mainSketchFile}`,
     "",

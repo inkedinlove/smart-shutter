@@ -7,6 +7,12 @@ import AppleProvider from "next-auth/providers/apple";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 
+import {
+  AUTH_SESSION_MAX_AGE_SECONDS,
+  AUTH_SESSION_UPDATE_AGE_SECONDS,
+  clearTrackedJwtSessionRecord,
+  syncTrackedJwtSessionRecord,
+} from "@/lib/auth-session-tracking";
 import { getDb, isDatabaseConfigured } from "@/lib/db";
 import { verifyPassword } from "@/lib/passwords";
 import {
@@ -160,6 +166,10 @@ function buildConfiguredProviders(): NextAuthOptions["providers"] {
           return null;
         }
 
+        if (user.emailVerificationRequired && !user.emailVerified) {
+          throw new Error("Verify your email before signing in.");
+        }
+
         clearRateLimit({
           bucket: "auth-sign-in",
           key: rateLimitKey,
@@ -224,8 +234,8 @@ export const authOptions: NextAuthOptions = {
   adapter: getAdapter(),
   session: {
     strategy: "jwt",
-    maxAge: 60 * 60 * 24 * 14,
-    updateAge: 60 * 60 * 8,
+    maxAge: AUTH_SESSION_MAX_AGE_SECONDS,
+    updateAge: AUTH_SESSION_UPDATE_AGE_SECONDS,
   },
   pages: {
     signIn: "/login",
@@ -234,12 +244,16 @@ export const authOptions: NextAuthOptions = {
   useSecureCookies: process.env.NODE_ENV === "production",
   providers: buildConfiguredProviders(),
   callbacks: {
-    async jwt({ token, user, account }) {
+    async jwt({ token, user, account, trigger }) {
       const db = getDb();
       const userId = getUserIdFromAuthPayload({
         userId: typeof user?.id === "string" ? user.id : null,
         tokenSub: typeof token.sub === "string" ? token.sub : null,
       });
+
+      if (userId && typeof token.sub !== "string") {
+        token.sub = userId;
+      }
 
       if (
         isDatabaseConfigured() &&
@@ -301,6 +315,14 @@ export const authOptions: NextAuthOptions = {
           typeof user.profileId === "string" ? user.profileId : null;
       }
 
+      if (isDatabaseConfigured() && db && userId) {
+        await syncTrackedJwtSessionRecord({
+          token,
+          userId,
+          trigger,
+        });
+      }
+
       return token;
     },
     async session({ session, token }) {
@@ -313,6 +335,11 @@ export const authOptions: NextAuthOptions = {
       }
 
       return session;
+    },
+  },
+  events: {
+    async signOut(message) {
+      await clearTrackedJwtSessionRecord("token" in message ? message.token : null);
     },
   },
 };

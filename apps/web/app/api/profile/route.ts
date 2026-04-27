@@ -1,5 +1,6 @@
 import { AccessControlError, listAccessibleDevices } from "@/lib/access-control";
 import { apiError, apiOk } from "@/lib/api-response";
+import { getAuthActivitySummaryForUser } from "@/lib/auth-insights";
 import { getAlexaPublicSetupConfig } from "@/lib/integrations/alexa-oauth";
 import { getVoiceIntegrationsForProfile } from "@/lib/profiles";
 
@@ -12,6 +13,9 @@ export async function GET() {
     const voiceIntegrations = await getVoiceIntegrationsForProfile(
       context.profile.profileId,
     );
+    const userId =
+      typeof context.session?.user?.id === "string" ? context.session.user.id : "";
+    const authActivity = await getAuthActivitySummaryForUser(userId);
 
     return apiOk(
       {
@@ -19,6 +23,7 @@ export async function GET() {
         devices,
         voiceIntegrations,
         alexaSetup: getAlexaPublicSetupConfig(),
+        authActivity,
       },
       {
         headers: {

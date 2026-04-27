@@ -39,11 +39,24 @@ type AlexaSetupRecord = {
   usesPkce: boolean;
 };
 
+type AuthMethodRecord = {
+  provider: string;
+  linkedAt: string | null;
+  updatedAt: string | null;
+};
+
+type AuthActivityRecord = {
+  activeSessionCount: number;
+  lastSessionSeenAt: string | null;
+  authMethods: AuthMethodRecord[];
+};
+
 type ProfileResponse = {
   profile: ProfileRecord;
   devices: RegisteredDevice[];
   voiceIntegrations: VoiceIntegrationRecord[];
   alexaSetup: AlexaSetupRecord;
+  authActivity: AuthActivityRecord;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -65,13 +78,16 @@ function isDevicesResponse(value: unknown): value is ProfileResponse {
     Array.isArray(value.devices) &&
     Array.isArray(value.voiceIntegrations) &&
     isRecord(value.alexaSetup) &&
+    isRecord(value.authActivity) &&
     typeof value.alexaSetup.enabled === "boolean" &&
     typeof value.alexaSetup.baseUrl === "string" &&
     typeof value.alexaSetup.clientId === "string" &&
     typeof value.alexaSetup.authorizationUrl === "string" &&
     typeof value.alexaSetup.tokenUrl === "string" &&
     typeof value.alexaSetup.smartHomeUrl === "string" &&
-    typeof value.alexaSetup.usesPkce === "boolean"
+    typeof value.alexaSetup.usesPkce === "boolean" &&
+    typeof value.authActivity.activeSessionCount === "number" &&
+    Array.isArray(value.authActivity.authMethods)
   );
 }
 
@@ -85,6 +101,36 @@ function formatJoinedDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
   }).format(parsed);
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) {
+    return "Not yet recorded";
+  }
+
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return "Unknown";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(parsed);
+}
+
+function getAuthMethodLabel(provider: string): string {
+  switch (provider) {
+    case "credentials":
+      return "Email and password";
+    case "google":
+      return "Google";
+    case "apple":
+      return "Apple";
+    default:
+      return provider;
+  }
 }
 
 export const dynamic = "force-dynamic";
@@ -104,6 +150,7 @@ export default function ProfilePage() {
     [],
   );
   const [alexaSetup, setAlexaSetup] = useState<AlexaSetupRecord | null>(null);
+  const [authActivity, setAuthActivity] = useState<AuthActivityRecord | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -134,6 +181,7 @@ export default function ProfilePage() {
           setOwnedDeviceCount(payload.devices.length);
           setVoiceIntegrations(payload.voiceIntegrations);
           setAlexaSetup(payload.alexaSetup);
+          setAuthActivity(payload.authActivity);
           setErrorMessage(null);
         });
       } catch (error) {
@@ -194,6 +242,9 @@ export default function ProfilePage() {
       alexaSetup.tokenUrl &&
       alexaSetup.smartHomeUrl,
   );
+  const activeSessionCount = authActivity?.activeSessionCount ?? 0;
+  const authMethods = authActivity?.authMethods ?? [];
+  const lastSessionSeenAt = authActivity?.lastSessionSeenAt ?? null;
 
   return (
     <AppShell
@@ -273,8 +324,14 @@ export default function ProfilePage() {
             <div className="text-xs uppercase tracking-[0.22em] text-slate-400">
               Session
             </div>
-            <div className="mt-3 text-sm leading-7 text-slate-300">
-              Signed in and ready to manage your shutters.
+            <div className="mt-3 text-3xl font-semibold text-white">
+              {isLoadingProfile ? "..." : activeSessionCount}
+            </div>
+            <div className="mt-2 text-sm text-slate-400">
+              Active tracked sessions
+            </div>
+            <div className="mt-4 text-sm leading-7 text-slate-300">
+              Last session activity: {formatDateTime(lastSessionSeenAt)}
             </div>
             <button
               className="mt-5 inline-flex w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:border-rose-300/30 hover:bg-rose-300/10 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
@@ -287,6 +344,33 @@ export default function ProfilePage() {
             >
               {isSigningOut ? "Signing out..." : "Sign out"}
             </button>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-[1rem] border border-white/10 bg-white/5 p-5">
+          <div className="text-xs uppercase tracking-[0.22em] text-slate-400">
+            Sign-in methods
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {authMethods.length > 0 ? (
+              authMethods.map((method) => (
+                <div
+                  key={method.provider}
+                  className="rounded-lg border border-white/10 bg-slate-950/40 p-4"
+                >
+                  <div className="text-sm font-semibold text-white">
+                    {getAuthMethodLabel(method.provider)}
+                  </div>
+                  <div className="mt-2 text-sm leading-6 text-slate-400">
+                    Linked {formatDateTime(method.linkedAt)}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-lg border border-dashed border-white/10 bg-slate-950/20 p-4 text-sm text-slate-400 md:col-span-2">
+                No linked sign-in methods have been recorded yet.
+              </div>
+            )}
           </div>
         </div>
 

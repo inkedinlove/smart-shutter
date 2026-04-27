@@ -50,6 +50,14 @@ function parseFileNameFromContentDisposition(
   return match?.[1] ?? fallbackFileName;
 }
 
+function getProvisioningCodeFromResponse(response: Response): string | null {
+  const provisioningCode = response.headers
+    .get("X-SmartShutter-Provisioning-Code")
+    ?.trim();
+
+  return provisioningCode ? provisioningCode : null;
+}
+
 async function downloadBlobResponse(
   response: Response,
   fallbackFileName: string,
@@ -140,12 +148,15 @@ export default function ProvisioningManager({
         throw new Error(errorText);
       }
 
+      const provisioningCode = getProvisioningCodeFromResponse(response);
       await downloadBlobResponse(
         response,
         `${selectedDevice.deviceId}-firmware-package.zip`,
       );
       setActionMessage(
-        `Downloaded the ready-to-flash package for ${selectedDevice.deviceId}.`,
+        provisioningCode
+          ? `Downloaded the ready-to-flash package for ${selectedDevice.deviceId}. Tracking code: ${provisioningCode}.`
+          : `Downloaded the ready-to-flash package for ${selectedDevice.deviceId}.`,
       );
     } catch (error) {
       if (error instanceof SessionRequiredError) {
@@ -203,11 +214,16 @@ export default function ProvisioningManager({
         throw new Error(errorText);
       }
 
+      const provisioningCode = getProvisioningCodeFromResponse(response);
       await downloadBlobResponse(
         response,
         `${selectedDevice.deviceId}-config.h`,
       );
-      setActionMessage(`Downloaded ${selectedDevice.deviceId} config.h.`);
+      setActionMessage(
+        provisioningCode
+          ? `Downloaded ${selectedDevice.deviceId} config.h. Tracking code: ${provisioningCode}.`
+          : `Downloaded ${selectedDevice.deviceId} config.h.`,
+      );
     } catch (error) {
       if (error instanceof SessionRequiredError) {
         redirectToLogin("/setup");

@@ -143,16 +143,36 @@ Notes:
 
 ## Auth Setup
 
-Customer mode uses Auth.js credentials sign-in.
+Customer mode uses Auth.js sign-in with:
+
+- email and password
+- Google when `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set
+- Apple when `APPLE_CLIENT_ID` and `APPLE_CLIENT_SECRET` are set
+
+The current session model uses JWT auth cookies for compatibility with the
+Credentials provider, while still persisting linked auth methods and tracked
+session activity into Prisma-backed tables.
+
+Credentials sign-up now expects verification email delivery to be configured:
+
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `SMTP_SECURE`
+- `SMTP_USER`
+- `SMTP_PASSWORD`
+- `EMAIL_FROM`
+- `PUBLIC_APP_BASE_URL`
 
 Minimum setup:
 
 1. Set `INTERNAL_TEST_MODE=false`
 2. Set `DATABASE_URL`
 3. Set `AUTH_SECRET`
-4. Run Prisma generate, migrate, and seed
-5. Open `/login`
-6. Create a customer account
+4. If you want email/password signup, set SMTP env vars plus `EMAIL_FROM`
+5. Run Prisma generate, migrate, and seed
+6. Open `/login`
+7. Create a customer account
+8. Verify the email address before signing in with a password
 
 Optional admin bootstrap:
 
@@ -188,9 +208,13 @@ Internal test mode:
 Current hardening:
 
 - customer mode fails closed without session-backed ownership checks
+- auth uses JWT sessions with secure cookies in production, while persisting
+  active session tracking in the database for visibility and audit
 - admin mutations require admin role or `ADMIN_TOKEN`
 - claim codes expire, normalize input, and are single-use
 - command publishing is rate-limited and audited
+- provisioning package/config downloads are recorded in the database without
+  storing WiFi passwords
 - firmware release publishing requires admin access, HTTPS artifact URLs, and
   SHA-256 validation
 - `/api/health` reports security readiness without exposing secret values
@@ -417,6 +441,9 @@ It shows:
 - A firmware config preview with MQTT username and password redacted
 - An admin-only provisioning manager that generates a full ready-to-flash
   package for the selected device and board, with a filled `config.h` inside
+- A recent provisioning activity log backed by Prisma `ProvisioningSession`
+  rows, including which device was prepared, which artifact was generated, and
+  whether it later reached claim completion
 
 This is temporary until browser flashing and richer provisioning exist. The current device provisioning roadmap is documented in [docs/provisioning-roadmap.md](docs/provisioning-roadmap.md).
 
@@ -425,6 +452,7 @@ Additional provisioning references:
 - [docs/device-claiming-roadmap.md](docs/device-claiming-roadmap.md)
 - [docs/device-registry.md](docs/device-registry.md)
 - [docs/factory-firmware-plan.md](docs/factory-firmware-plan.md)
+- [docs/provisioning-session-tracking.md](docs/provisioning-session-tracking.md)
 - [docs/profile-device-ownership.md](docs/profile-device-ownership.md)
 - [docs/browser-flashing-architecture.md](docs/browser-flashing-architecture.md)
 - [docs/qr-provisioning-architecture.md](docs/qr-provisioning-architecture.md)
@@ -445,6 +473,7 @@ and local fallback work.
 Customer account pages:
 
 - `/profile` shows the signed-in account summary
+- `/profile` shows linked sign-in methods and active tracked session count
 - `/devices` shows only the devices owned by that account
 - `/claim` lets a signed-in customer attach a new device by claim code
 

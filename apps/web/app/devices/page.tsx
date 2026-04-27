@@ -27,6 +27,11 @@ type ProfileResponse = {
   devices: RegisteredDevice[];
 };
 
+type DeviceOwnershipResponse = {
+  deviceId: string;
+  ownerProfileId: string | null;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -57,6 +62,16 @@ function isProfileResponse(value: unknown): value is ProfileResponse {
     isProfileRecord(value.profile) &&
     Array.isArray(value.devices) &&
     value.devices.every(isRegisteredDevice)
+  );
+}
+
+function isDeviceOwnershipResponse(
+  value: unknown,
+): value is DeviceOwnershipResponse {
+  return (
+    isRecord(value) &&
+    typeof value.deviceId === "string" &&
+    (typeof value.ownerProfileId === "string" || value.ownerProfileId === null)
   );
 }
 
@@ -149,6 +164,9 @@ export default function DevicesPage() {
   >({});
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  const [pendingRemoveDeviceId, setPendingRemoveDeviceId] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
     let isCancelled = false;
@@ -228,6 +246,71 @@ export default function DevicesPage() {
       ).length,
     [ownedDevices, statusesByDeviceId],
   );
+
+  async function handleRemoveDevice(device: RegisteredDevice) {
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(
+        [
+          `Remove ${device.label} from this account?`,
+          "",
+          "The factory device record will stay in Smart Shutter.",
+          "You can claim the device again later, but it will disappear from your account right now.",
+        ].join("\n"),
+      );
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setPendingRemoveDeviceId(device.deviceId);
+    setErrorMessage(null);
+
+    try {
+      const response = await fetchWithShortTimeout(
+        `/api/devices/${encodeURIComponent(device.deviceId)}/ownership`,
+        {
+          method: "DELETE",
+          timeoutMessage: "Removing the device timed out.",
+        },
+      );
+      const payload = await readApiData(
+        response,
+        isDeviceOwnershipResponse,
+        "Unable to remove this device from your account.",
+      );
+
+      startTransition(() => {
+        setOwnedDevices((current) =>
+          current.filter(
+            (currentDevice) => currentDevice.deviceId !== payload.deviceId,
+          ),
+        );
+        setStatusesByDeviceId((current) => {
+          const next = { ...current };
+          delete next[payload.deviceId];
+          return next;
+        });
+      });
+
+      reloadDevices();
+    } catch (error) {
+      if (error instanceof SessionRequiredError) {
+        redirectToLogin("/devices");
+        return;
+      }
+
+      startTransition(() => {
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : "Unable to remove this device from your account.",
+        );
+      });
+    } finally {
+      setPendingRemoveDeviceId(null);
+    }
+  }
 
   return (
     <AppShell
@@ -343,6 +426,9 @@ export default function DevicesPage() {
                     >
                       Open setup
                     </Link>
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap gap-3">
                     {!liveStatus?.online ? (
                       <Link
                         className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-semibold text-white transition hover:border-cyan-300/40 hover:bg-cyan-400/10"
@@ -351,6 +437,19 @@ export default function DevicesPage() {
                         Wi-Fi setup
                       </Link>
                     ) : null}
+
+                    <button
+                      type="button"
+                      className="inline-flex items-center justify-center rounded-xl border border-rose-400/30 bg-rose-400/12 px-4 py-3 text-sm font-semibold text-rose-100 transition hover:bg-rose-400/18 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={pendingRemoveDeviceId === device.deviceId}
+                      onClick={() => {
+                        void handleRemoveDevice(device);
+                      }}
+                    >
+                      {pendingRemoveDeviceId === device.deviceId
+                        ? "Removing..."
+                        : "Remove from my account"}
+                    </button>
                   </div>
 
                   <div className="mt-6 grid gap-4 md:grid-cols-3">

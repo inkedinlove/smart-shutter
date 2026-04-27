@@ -32,6 +32,7 @@ export type RegisteredUserAccount = {
   displayName: string;
   email: string;
   role: UserRole;
+  emailVerificationRequired: boolean;
 };
 
 function getAccountsDb() {
@@ -166,6 +167,7 @@ export async function createUserAccount(input: {
           data: {
             name: displayName,
             email,
+            emailVerificationRequired: true,
             passwordHash,
             role,
           },
@@ -193,6 +195,7 @@ export async function createUserAccount(input: {
         displayName: account.profile.displayName,
         email,
         role,
+        emailVerificationRequired: true,
       };
     }
 
@@ -200,6 +203,7 @@ export async function createUserAccount(input: {
       data: {
         name: displayName,
         email,
+        emailVerificationRequired: true,
         passwordHash,
         role,
         profile: {
@@ -224,6 +228,7 @@ export async function createUserAccount(input: {
       displayName: user.profile.displayName,
       email,
       role,
+      emailVerificationRequired: true,
     };
   } catch (error) {
     if (
@@ -284,6 +289,14 @@ export async function syncOAuthUserAccount(input: {
 
       if (email && !existingUser.email) {
         userUpdateData.email = email;
+      }
+
+      if (!existingUser.emailVerified && email) {
+        userUpdateData.emailVerified = new Date();
+      }
+
+      if (existingUser.emailVerificationRequired) {
+        userUpdateData.emailVerificationRequired = false;
       }
 
       if (existingUser.role !== role) {
@@ -388,6 +401,7 @@ export async function syncOAuthUserAccount(input: {
         displayName: profile.displayName,
         email: email ?? user.email ?? profile.email ?? "",
         role,
+        emailVerificationRequired: false,
       };
     });
   } catch (error) {

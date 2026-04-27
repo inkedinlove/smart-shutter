@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 
 import { getDb, isDatabaseConfigured } from "@/lib/db";
+import { completeProvisioningSessionsForDevice } from "@/lib/provisioning-sessions";
 
 const CLAIM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CLAIM_CODE_LENGTH = 8;
@@ -228,7 +229,7 @@ export async function redeemDeviceClaim(input: {
 
   const db = getClaimsDb();
 
-  return db.$transaction(async (tx) => {
+  const claimSummary = await db.$transaction(async (tx) => {
     const claim = await tx.deviceClaim.findUnique({
       where: {
         claimCode,
@@ -286,4 +287,8 @@ export async function redeemDeviceClaim(input: {
 
     return mapClaimSummary(updatedClaim, claim.device.label);
   });
+
+  await completeProvisioningSessionsForDevice(claimSummary.deviceId);
+
+  return claimSummary;
 }

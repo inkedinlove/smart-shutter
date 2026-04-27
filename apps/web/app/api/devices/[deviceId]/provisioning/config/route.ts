@@ -1,7 +1,8 @@
-import { requireAdminAccess, AdminAuthorizationError } from "@/lib/admin";
+import { requireAdminActor, AdminAuthorizationError } from "@/lib/admin";
 import { apiError } from "@/lib/api-response";
 import { getRegisteredDeviceById } from "@/lib/device-registry";
 import { getMqttConfig, getPublicMqttConfig } from "@/lib/mqtt";
+import { createProvisioningSession } from "@/lib/provisioning-sessions";
 import {
   buildProvisionedConfig,
   normalizeProvisioningWifiInput,
@@ -31,7 +32,7 @@ function buildFileName(deviceId: string): string {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    await requireAdminAccess(request);
+    const adminActor = await requireAdminActor(request);
 
     const { deviceId } = await context.params;
     const device = await getRegisteredDeviceById(deviceId);
@@ -63,12 +64,28 @@ export async function POST(request: Request, context: RouteContext) {
       wifiSsid: wifiInput.wifiSsid,
       wifiPassword: wifiInput.wifiPassword,
     });
+    const fileName = buildFileName(device.deviceId);
+    const provisioningSession = await createProvisioningSession({
+      deviceId: device.deviceId,
+      artifactType: "config",
+      board: device.board,
+      fileName,
+      wifiMode: wifiInput.wifiMode,
+      wifiSsid: wifiInput.wifiSsid,
+      createdByUserId: adminActor.userId,
+      createdByProfileId: adminActor.profileId,
+    });
 
     return new Response(configText, {
       headers: {
         "Cache-Control": "no-store",
-        "Content-Disposition": `attachment; filename="${buildFileName(device.deviceId)}"`,
+        "Content-Disposition": `attachment; filename="${fileName}"`,
         "Content-Type": "text/plain; charset=utf-8",
+        ...(provisioningSession
+          ? {
+              "X-SmartShutter-Provisioning-Code": provisioningSession.pairingCode,
+            }
+          : {}),
       },
     });
   } catch (error) {

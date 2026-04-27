@@ -41,6 +41,7 @@ model User {
   name          String?
   email         String?   @unique
   emailVerified DateTime?
+  emailVerificationRequired Boolean @default(false)
   image         String?
   passwordHash  String?
   role          String    @default("customer")
@@ -49,6 +50,7 @@ model User {
   accounts      Account[]
   sessions      Session[]
   profile       UserProfile?
+  provisioningSessions ProvisioningSession[] @relation("ProvisioningSessionCreatedByUser")
 }
 
 model UserProfile {
@@ -63,6 +65,7 @@ model UserProfile {
   claims      DeviceClaim[]
   commandAudits DeviceCommandAudit[]
   voiceIntegrations VoiceIntegrationAccount[]
+  provisioningSessions ProvisioningSession[] @relation("ProvisioningSessionCreatedByProfile")
 }
 
 model DeviceClaim {
@@ -167,13 +170,25 @@ model ProvisioningSession {
   deviceId    String?
   pairingCode String    @unique
   status      String    @default("created")
+  artifactType String   @default("package")
+  board       String    @default("unknown")
+  fileName    String?
+  wifiMode    String    @default("factory")
+  wifiSsidHint String?
+  createdByUserId String?
+  createdByProfileId String?
   expiresAt   DateTime
   createdAt   DateTime  @default(now())
   completedAt DateTime?
   device      Device?   @relation(fields: [deviceId], references: [deviceId], onDelete: SetNull)
+  createdByUser User? @relation("ProvisioningSessionCreatedByUser", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByProfile UserProfile? @relation("ProvisioningSessionCreatedByProfile", fields: [createdByProfileId], references: [id], onDelete: SetNull)
 
   @@index([deviceId])
+  @@index([createdByUserId, createdAt])
+  @@index([createdByProfileId, createdAt])
   @@index([expiresAt])
+  @@index([status, createdAt])
 }
 
 model VoiceIntegrationAccount {

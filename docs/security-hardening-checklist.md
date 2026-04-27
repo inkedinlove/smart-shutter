@@ -23,6 +23,12 @@ Recommended:
 - `ADMIN_EMAILS`
 - `FIRMWARE_UPDATE_CHANNEL=stable`
 - `ALEXA_SKILL_ENABLED=false`
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `SMTP_SECURE`
+- `SMTP_USER`
+- `SMTP_PASSWORD`
+- `EMAIL_FROM`
 
 ## Secret Rotation
 
@@ -50,10 +56,21 @@ Recommended:
 
 ## Production Auth
 
-- Customer mode requires Auth.js with database-backed sessions.
+- Customer mode requires Auth.js with JWT session cookies, a real `AUTH_SECRET`,
+  and database-backed user/account/session tracking.
+- If email/password signup is enabled, SMTP verification delivery must be
+  configured and tested.
 - No customer route should be relied on in `INTERNAL_TEST_MODE=true`.
 - Admin routes must be used only by admin accounts or token-authenticated admin
   requests.
+
+## Provisioning Tracking
+
+- Use `/setup` for generated firmware packages and config files so the action is
+  captured in Prisma `ProvisioningSession` rows.
+- Do not store or screenshot generated packages outside approved internal
+  channels.
+- WiFi passwords should stay out of the database and operator notes.
 
 ## Claim-Code Expiration
 

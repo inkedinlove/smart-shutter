@@ -1,9 +1,11 @@
-import { requireAdminAccess, AdminAuthorizationError } from "@/lib/admin";
+import { requireAdminActor, AdminAuthorizationError } from "@/lib/admin";
 import { apiError } from "@/lib/api-response";
 import { getRegisteredDeviceById } from "@/lib/device-registry";
 import { getMqttConfig, getPublicMqttConfig } from "@/lib/mqtt";
+import { createProvisioningSession } from "@/lib/provisioning-sessions";
 import {
   buildProvisionedConfig,
+  buildProvisioningPackageFileName,
   normalizeProvisioningWifiInput,
 } from "@/lib/provisioning";
 import { buildProvisioningPackage } from "@/lib/provisioning-package";
@@ -28,7 +30,7 @@ function isProvisioningBody(value: unknown): value is ProvisioningBody {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    await requireAdminAccess(request);
+    const adminActor = await requireAdminActor(request);
 
     const { deviceId } = await context.params;
     const device = await getRegisteredDeviceById(deviceId);
@@ -60,9 +62,24 @@ export async function POST(request: Request, context: RouteContext) {
       wifiSsid: wifiInput.wifiSsid,
       wifiPassword: wifiInput.wifiPassword,
     });
+    const packageFileName = buildProvisioningPackageFileName(
+      device.deviceId,
+      device.board,
+    );
+    const provisioningSession = await createProvisioningSession({
+      deviceId: device.deviceId,
+      artifactType: "package",
+      board: device.board,
+      fileName: packageFileName,
+      wifiMode: wifiInput.wifiMode,
+      wifiSsid: wifiInput.wifiSsid,
+      createdByUserId: adminActor.userId,
+      createdByProfileId: adminActor.profileId,
+    });
     const packageResult = await buildProvisioningPackage({
       configText,
       device,
+      provisioningCode: provisioningSession?.pairingCode ?? null,
       wifiMode: wifiInput.wifiMode,
       wifiSsid: wifiInput.wifiSsid,
     });
@@ -77,6 +94,11 @@ export async function POST(request: Request, context: RouteContext) {
         "Cache-Control": "no-store",
         "Content-Disposition": `attachment; filename="${packageResult.fileName}"`,
         "Content-Type": "application/zip",
+        ...(provisioningSession
+          ? {
+              "X-SmartShutter-Provisioning-Code": provisioningSession.pairingCode,
+            }
+          : {}),
       },
     });
   } catch (error) {
