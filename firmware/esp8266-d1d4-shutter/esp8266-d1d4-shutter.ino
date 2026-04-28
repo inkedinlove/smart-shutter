@@ -50,7 +50,15 @@
 #endif
 
 #ifndef OTA_AUTO_CHECK_INTERVAL_MS
-#define OTA_AUTO_CHECK_INTERVAL_MS 3600000UL
+#define OTA_AUTO_CHECK_INTERVAL_MS 21600000UL
+#endif
+
+#ifndef OTA_AUTO_CHECK_JITTER_MS
+#define OTA_AUTO_CHECK_JITTER_MS 900000UL
+#endif
+
+#ifndef STATUS_INTERVAL_MS
+#define STATUS_INTERVAL_MS 30000UL
 #endif
 
 #ifndef SAFE_SETUP_MODE
@@ -167,6 +175,7 @@ unsigned long lastStatusLogMs = 0;
 unsigned long lastWiFiRetryMs = 0;
 unsigned long lastMqttRetryMs = 0;
 unsigned long lastAutoUpdateCheckMs = 0;
+unsigned long otaAutoCheckJitterMs = 0;
 unsigned long wifiAttemptStartedMs = 0;
 unsigned long setupPortalStartedMs = 0;
 
@@ -1976,15 +1985,16 @@ void maybeRunAutoUpdateCheck() {
   }
 
   const unsigned long now = millis();
+  const unsigned long autoCheckInitialDelayMs =
+    OTA_AUTO_CHECK_INITIAL_DELAY_MS + otaAutoCheckJitterMs;
+  const unsigned long autoCheckIntervalMs =
+    OTA_AUTO_CHECK_INTERVAL_MS + otaAutoCheckJitterMs;
 
-  if (now - bootStartedMs < OTA_AUTO_CHECK_INITIAL_DELAY_MS) {
+  if (now - bootStartedMs < autoCheckInitialDelayMs) {
     return;
   }
 
-  if (
-    lastAutoUpdateCheckMs != 0 &&
-    now - lastAutoUpdateCheckMs < OTA_AUTO_CHECK_INTERVAL_MS
-  ) {
+  if (lastAutoUpdateCheckMs != 0 && now - lastAutoUpdateCheckMs < autoCheckIntervalMs) {
     return;
   }
 
@@ -2089,6 +2099,10 @@ void setup() {
   delay(1000);
 
   bootStartedMs = millis();
+  otaAutoCheckJitterMs =
+    OTA_AUTO_CHECK_JITTER_MS > 0
+      ? ESP.getChipId() % (OTA_AUTO_CHECK_JITTER_MS + 1UL)
+      : 0;
 
   Serial.println("Smart Shutter ESP8266 D1-D4 Stepper booting...");
   setDeviceMode(DEVICE_MODE_BOOTING);
@@ -2171,8 +2185,10 @@ void loop() {
     Serial.println("Setup portal timeout reached; keeping AP active for support.");
   }
 
-  if (mqttClient.connected() && millis() - lastStatusPublishMs >= STATUS_INTERVAL_MS) {
-    publishStatus(false);
+  if (mqttClient.connected() && !movingNow) {
+    if (millis() - lastStatusPublishMs >= STATUS_INTERVAL_MS) {
+      publishStatus(false);
+    }
   }
 
   maybeRunAutoUpdateCheck();

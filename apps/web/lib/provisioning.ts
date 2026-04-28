@@ -215,7 +215,8 @@ constexpr const char* STATUS_TOPIC = ${toCString(input.statusTopic)};
 #define OTA_MANIFEST_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/manifest"
 #define OTA_EVENTS_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/events"
 #define OTA_AUTO_CHECK_INITIAL_DELAY_MS 300000UL
-#define OTA_AUTO_CHECK_INTERVAL_MS 3600000UL
+#define OTA_AUTO_CHECK_INTERVAL_MS 21600000UL
+#define OTA_AUTO_CHECK_JITTER_MS 900000UL
 
 // ---------------------------------------------------------------------------
 // Optional Behavior Flags
@@ -248,7 +249,7 @@ constexpr float MOTOR_ACCELERATION = ${pinout.motorAcceleration.toFixed(1)}f;
 // Retry and Status Timing
 // ---------------------------------------------------------------------------
 
-constexpr unsigned long STATUS_INTERVAL_MS = 3000;
+constexpr unsigned long STATUS_INTERVAL_MS = 30000;
 constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
 constexpr unsigned long WIFI_RETRY_MS = 5000;
 constexpr unsigned long MQTT_RETRY_MS = 5000;
