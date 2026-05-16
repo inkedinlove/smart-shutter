@@ -35,11 +35,15 @@ constexpr const char* STATUS_TOPIC = "shutters/{deviceId}/status";
 // OTA Update Settings
 // ---------------------------------------------------------------------------
 
-// Leave OTA disabled until you are testing on a spare ESP32 with a stable
-// power supply and a known-good firmware artifact.
-#define ENABLE_OTA_UPDATES false
+// ESP32 builds support Wi-Fi OTA updates. Saved Wi-Fi, calibration, and
+// device identity settings stay in Preferences across OTA firmware swaps.
+#define ENABLE_OTA_UPDATES true
 #define API_BASE_URL "https://your-app.example.com"
 #define OTA_MANIFEST_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/manifest"
+#define OTA_EVENTS_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/events"
+#define OTA_AUTO_CHECK_INITIAL_DELAY_MS 300000UL
+#define OTA_AUTO_CHECK_INTERVAL_MS 21600000UL
+#define OTA_AUTO_CHECK_JITTER_MS 900000UL
 
 // ---------------------------------------------------------------------------
 // Optional Behavior Flags
@@ -55,6 +59,13 @@ constexpr const char* STATUS_TOPIC = "shutters/{deviceId}/status";
 
 // Flip this to true if the motor direction is reversed for your shutter.
 #define INVERT_DIRECTION false
+
+// Enable STA-mode Wi-Fi power save for lower idle battery drain.
+#define ENABLE_WIFI_POWER_SAVE true
+
+// Keep this false for battery installs so the stepper coils release at idle.
+// Set it to true only if your hardware needs holding torque while parked.
+#define KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE false
 
 // ---------------------------------------------------------------------------
 // Motor Wiring and Motion Tuning
@@ -79,7 +90,11 @@ constexpr float MOTOR_ACCELERATION = 350.0f;
 // Retry and Status Timing
 // ---------------------------------------------------------------------------
 
-constexpr unsigned long STATUS_INTERVAL_MS = 3000;
+// Status publishes are event-driven. Keep a small movement interval so the UI
+// can still watch progress, and use 0 to disable idle heartbeats completely.
+#define MOVING_STATUS_INTERVAL_MS 5000UL
+#define IDLE_STATUS_INTERVAL_MS 0UL
+#define MQTT_KEEP_ALIVE_SECONDS 60
 constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
 constexpr unsigned long WIFI_RETRY_MS = 5000;
 constexpr unsigned long MQTT_RETRY_MS = 5000;

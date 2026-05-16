@@ -151,6 +151,9 @@ export function createFirmwareDefinesPreview(
   device: RegisteredDevice,
   broker: PublicBrokerConnection,
 ): string {
+  const otaEnabled =
+    device.board === "esp32" || device.board === "esp8266-d1d4";
+
   return [
     `// Board: ${formatDeviceBoardLabel(device.board)}`,
     `#define DEVICE_ID "${device.deviceId}"`,
@@ -162,10 +165,17 @@ export function createFirmwareDefinesPreview(
     `#define MQTT_CLIENT_ID "smart-shutter-${device.deviceId}"`,
     `#define COMMAND_TOPIC "${device.commandTopic}"`,
     `#define STATUS_TOPIC "${device.statusTopic}"`,
-    "#define ENABLE_OTA_UPDATES false",
+    `#define ENABLE_OTA_UPDATES ${otaEnabled ? "true" : "false"}`,
     `#define API_BASE_URL "${broker.publicAppBaseUrl}"`,
     '#define OTA_MANIFEST_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/manifest"',
     '#define OTA_EVENTS_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/events"',
+    ...(otaEnabled
+      ? [
+          "#define OTA_AUTO_CHECK_INITIAL_DELAY_MS 300000UL",
+          "#define OTA_AUTO_CHECK_INTERVAL_MS 21600000UL",
+          "#define OTA_AUTO_CHECK_JITTER_MS 900000UL",
+        ]
+      : []),
   ].join("\n");
 }
 

@@ -375,9 +375,13 @@ constexpr const char* STATUS_TOPIC = ${toCString(input.statusTopic)};
 // OTA Update Settings
 // ---------------------------------------------------------------------------
 
-#define ENABLE_OTA_UPDATES false
+#define ENABLE_OTA_UPDATES true
 #define API_BASE_URL ${toCString(input.publicAppBaseUrl)}
 #define OTA_MANIFEST_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/manifest"
+#define OTA_EVENTS_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/events"
+#define OTA_AUTO_CHECK_INITIAL_DELAY_MS 300000UL
+#define OTA_AUTO_CHECK_INTERVAL_MS 21600000UL
+#define OTA_AUTO_CHECK_JITTER_MS 900000UL
 
 // ---------------------------------------------------------------------------
 // Optional Behavior Flags
@@ -386,6 +390,8 @@ constexpr const char* STATUS_TOPIC = ${toCString(input.statusTopic)};
 #define ENABLE_LOCAL_FALLBACK_WEB false
 #define SAFE_SETUP_MODE true
 #define INVERT_DIRECTION false
+#define ENABLE_WIFI_POWER_SAVE true
+#define KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE false
 
 // ---------------------------------------------------------------------------
 // Motor Wiring and Motion Tuning
@@ -409,7 +415,9 @@ constexpr float MOTOR_ACCELERATION = 350.0f;
 // Retry and Status Timing
 // ---------------------------------------------------------------------------
 
-constexpr unsigned long STATUS_INTERVAL_MS = 3000;
+#define MOVING_STATUS_INTERVAL_MS 5000UL
+#define IDLE_STATUS_INTERVAL_MS 0UL
+#define MQTT_KEEP_ALIVE_SECONDS 60
 constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
 constexpr unsigned long WIFI_RETRY_MS = 5000;
 constexpr unsigned long MQTT_RETRY_MS = 5000;

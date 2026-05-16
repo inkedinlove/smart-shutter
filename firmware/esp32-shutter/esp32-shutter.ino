@@ -40,6 +40,18 @@
 #define OTA_EVENTS_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/events"
 #endif
 
+#ifndef OTA_AUTO_CHECK_INITIAL_DELAY_MS
+#define OTA_AUTO_CHECK_INITIAL_DELAY_MS 300000UL
+#endif
+
+#ifndef OTA_AUTO_CHECK_INTERVAL_MS
+#define OTA_AUTO_CHECK_INTERVAL_MS 21600000UL
+#endif
+
+#ifndef OTA_AUTO_CHECK_JITTER_MS
+#define OTA_AUTO_CHECK_JITTER_MS 900000UL
+#endif
+
 #ifndef SAFE_SETUP_MODE
 #define SAFE_SETUP_MODE true
 #endif
@@ -78,6 +90,26 @@
 
 #ifndef MQTT_CLIENT_ID
 #define MQTT_CLIENT_ID ""
+#endif
+
+#ifndef MOVING_STATUS_INTERVAL_MS
+#define MOVING_STATUS_INTERVAL_MS 5000UL
+#endif
+
+#ifndef IDLE_STATUS_INTERVAL_MS
+#define IDLE_STATUS_INTERVAL_MS 0UL
+#endif
+
+#ifndef MQTT_KEEP_ALIVE_SECONDS
+#define MQTT_KEEP_ALIVE_SECONDS 60
+#endif
+
+#ifndef ENABLE_WIFI_POWER_SAVE
+#define ENABLE_WIFI_POWER_SAVE true
+#endif
+
+#ifndef KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE
+#define KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE false
 #endif
 
 // -----------------------------------------------------------------------------
@@ -125,6 +157,8 @@ struct OtaManifest {
   String latestVersion;
   String board;
   String channel;
+  bool autoUpdateEnabled = false;
+  String autoUpdateChannel;
   String artifactUrl;
   String sha256;
   long sizeBytes = -1;
@@ -155,6 +189,8 @@ unsigned long lastStatusPublishMs = 0;
 unsigned long lastStatusLogMs = 0;
 unsigned long lastWiFiRetryMs = 0;
 unsigned long lastMqttRetryMs = 0;
+unsigned long lastAutoUpdateCheckMs = 0;
+unsigned long otaAutoCheckJitterMs = 0;
 unsigned long wifiAttemptStartedMs = 0;
 
 bool wifiConnectInProgress = false;
@@ -169,6 +205,8 @@ bool positionVerified = false;
 bool positionRecoveredFromInterruptedMotion = false;
 bool calibrationComplete = !SAFE_SETUP_MODE;
 bool movementLocked = false;
+bool stepperOutputsEnabled = true;
+bool wifiPowerSaveEnabled = false;
 
 int targetPercent = 0;
 long calibratedClosedPositionSteps = 0;
@@ -181,10 +219,16 @@ PositionEstimateState positionEstimateState =
   POSITION_ESTIMATE_NEEDS_VERIFICATION;
 String otaLastError = "";
 String otaTargetVersion = "";
+bool otaAutoUpdateEnabled = false;
+String otaAutoUpdateChannel = "stable";
 String resolvedDeviceId = "";
 String resolvedMqttClientId = "";
 String resolvedCommandTopic = "";
 String resolvedStatusTopic = "";
+String storedDeviceId = "";
+String storedMqttClientId = "";
+String storedCommandTopic = "";
+String storedStatusTopic = "";
 String runtimeWifiSsid = "";
 String runtimeWifiPassword = "";
 String setupPortalSsid = "";
@@ -357,6 +401,50 @@ bool isMoving() {
   return stepper.distanceToGo() != 0;
 }
 
+unsigned long getStatusPublishIntervalMs(bool movingNow) {
+  return movingNow ? MOVING_STATUS_INTERVAL_MS : IDLE_STATUS_INTERVAL_MS;
+}
+
+unsigned long getStatusLogIntervalMs(bool movingNow) {
+  const unsigned long intervalMs = getStatusPublishIntervalMs(movingNow);
+  return intervalMs > 0 ? intervalMs : 30000UL;
+}
+
+void setStepperOutputsEnabled(bool enabled) {
+  if (stepperOutputsEnabled == enabled) {
+    return;
+  }
+
+  stepperOutputsEnabled = enabled;
+
+  if (enabled) {
+    stepper.enableOutputs();
+  } else {
+    stepper.disableOutputs();
+  }
+}
+
+void syncStepperPowerState() {
+  setStepperOutputsEnabled(
+    KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE || isMoving()
+  );
+}
+
+void setWiFiPowerSaveEnabled(bool enabled) {
+  const bool nextEnabled = ENABLE_WIFI_POWER_SAVE && enabled;
+  if (wifiPowerSaveEnabled == nextEnabled) {
+    return;
+  }
+
+  WiFi.setSleep(nextEnabled);
+  wifiPowerSaveEnabled = nextEnabled;
+}
+
+void applyWiFiConnectionProfile(bool accessPointRequired) {
+  WiFi.mode(accessPointRequired ? WIFI_AP_STA : WIFI_STA);
+  setWiFiPowerSaveEnabled(!accessPointRequired);
+}
+
 DeviceMode getIdleModeFromConnectivity() {
   if (mqttClient.connected()) {
     return DEVICE_MODE_READY;
@@ -453,6 +541,10 @@ String resolveDeviceId() {
     return String(DEVICE_ID);
   }
 
+  if (hasText(storedDeviceId)) {
+    return storedDeviceId;
+  }
+
   return String("shutter-") + getMacSuffixLower();
 }
 
@@ -461,12 +553,24 @@ String resolveMqttClientId() {
     return String(MQTT_CLIENT_ID);
   }
 
+  if (hasText(storedMqttClientId)) {
+    return storedMqttClientId;
+  }
+
   return String("smart-shutter-") + resolvedDeviceId;
 }
 
-String resolveTopic(const char* configuredTopic, const char* topicSuffix) {
+String resolveTopic(
+  const char* configuredTopic,
+  const String& storedTopic,
+  const char* topicSuffix
+) {
   String topic = configuredTopic;
   topic.trim();
+
+  if (topic.length() == 0 && hasText(storedTopic)) {
+    topic = storedTopic;
+  }
 
   if (topic.length() == 0) {
     return String("shutters/") + resolvedDeviceId + "/" + topicSuffix;
@@ -523,6 +627,26 @@ bool savePersistedDeviceSettings(const String& ssid, const String& password) {
   const size_t storedSsidLength = preferences.putString("wifi_ssid", ssid);
   const size_t storedPasswordLength =
     preferences.putString("wifi_password", password);
+  const String deviceIdToStore =
+    hasText(resolvedDeviceId) ? resolvedDeviceId : resolveDeviceId();
+  const String mqttClientIdToStore =
+    hasText(resolvedMqttClientId) ? resolvedMqttClientId : resolveMqttClientId();
+  const String commandTopicToStore =
+    hasText(resolvedCommandTopic)
+      ? resolvedCommandTopic
+      : resolveTopic(COMMAND_TOPIC, storedCommandTopic, "commands");
+  const String statusTopicToStore =
+    hasText(resolvedStatusTopic)
+      ? resolvedStatusTopic
+      : resolveTopic(STATUS_TOPIC, storedStatusTopic, "status");
+  const size_t storedDeviceIdLength =
+    preferences.putString("device_id", deviceIdToStore);
+  const size_t storedMqttClientIdLength =
+    preferences.putString("mqtt_client_id", mqttClientIdToStore);
+  const size_t storedCommandTopicLength =
+    preferences.putString("cmd_topic", commandTopicToStore);
+  const size_t storedStatusTopicLength =
+    preferences.putString("status_topic", statusTopicToStore);
   const bool storedClosedPosition =
     preferences.putLong("closed_steps", calibratedClosedPositionSteps) > 0;
   const bool storedOpenPosition =
@@ -547,9 +671,26 @@ bool savePersistedDeviceSettings(const String& ssid, const String& password) {
 
   const bool storedSsid = ssid.length() == 0 || storedSsidLength > 0;
   const bool storedPassword = password.length() == 0 || storedPasswordLength > 0;
+  const bool savedDeviceId =
+    deviceIdToStore.length() == 0 || storedDeviceIdLength > 0;
+  const bool savedMqttClientId =
+    mqttClientIdToStore.length() == 0 || storedMqttClientIdLength > 0;
+  const bool savedCommandTopic =
+    commandTopicToStore.length() == 0 || storedCommandTopicLength > 0;
+  const bool savedStatusTopic =
+    statusTopicToStore.length() == 0 || storedStatusTopicLength > 0;
+
+  storedDeviceId = deviceIdToStore;
+  storedMqttClientId = mqttClientIdToStore;
+  storedCommandTopic = commandTopicToStore;
+  storedStatusTopic = statusTopicToStore;
 
   return storedSsid &&
          storedPassword &&
+         savedDeviceId &&
+         savedMqttClientId &&
+         savedCommandTopic &&
+         savedStatusTopic &&
          storedClosedPosition &&
          storedOpenPosition &&
          storedCalibrationComplete &&
@@ -573,14 +714,22 @@ void loadStoredDeviceSettings(String* ssid, String* password) {
   positionRecoveredFromInterruptedMotion = false;
   lastPersistedPositionSteps = 0;
   lastPersistedTargetSteps = 0;
+  storedDeviceId = "";
+  storedMqttClientId = "";
+  storedCommandTopic = "";
+  storedStatusTopic = "";
   preferences.begin("smart-shutter", true);
   *ssid = preferences.getString("wifi_ssid", "");
   *password = preferences.getString("wifi_password", "");
+  storedDeviceId = preferences.getString("device_id", "");
+  storedMqttClientId = preferences.getString("mqtt_client_id", "");
+  storedCommandTopic = preferences.getString("cmd_topic", "");
+  storedStatusTopic = preferences.getString("status_topic", "");
   const uint8_t storedVersion = preferences.getUChar("settings_v", 0);
   const bool hasStoredPosition = preferences.isKey("pos_steps");
   const bool storedMotionInProgress = preferences.getBool("pos_moving", false);
 
-  if (storedVersion >= PERSISTED_SETTINGS_VERSION) {
+  if (storedVersion >= 1) {
     directionInverted = preferences.getBool("dir_inverted", INVERT_DIRECTION);
     calibratedClosedPositionSteps = preferences.getLong("closed_steps", 0L);
     calibratedOpenPositionSteps = preferences.getLong(
@@ -706,6 +855,7 @@ String bytesToHexString(const unsigned char* bytes, size_t length) {
 
 void publishStatus(bool forceLog = false);
 void startLocalFallbackServerIfNeeded();
+bool checkForUpdate(bool autoCheck);
 
 void setOtaState(
   OtaState nextState,
@@ -800,7 +950,7 @@ size_t buildStatusPayload(
   DeviceMode modeValue,
   bool movingValue
 ) {
-  StaticJsonDocument<1280> statusDoc;
+  StaticJsonDocument<1536> statusDoc;
   statusDoc["deviceId"] = resolvedDeviceId;
   statusDoc["resolvedDeviceId"] = resolvedDeviceId;
   statusDoc["setupMode"] = setupPortalActive;
@@ -836,6 +986,8 @@ size_t buildStatusPayload(
   statusDoc["localFallbackActive"] =
     localFallbackServerStarted || localFallbackApStarted || setupPortalApStarted;
   statusDoc["otaEnabled"] = ENABLE_OTA_UPDATES;
+  statusDoc["otaAutoUpdateEnabled"] = otaAutoUpdateEnabled;
+  statusDoc["otaAutoUpdateChannel"] = otaAutoUpdateChannel;
   statusDoc["otaState"] = otaStateToString(otaState);
   if (otaLastError.length() > 0) {
     statusDoc["otaLastError"] = otaLastError;
@@ -875,7 +1027,8 @@ size_t buildStatusPayload(
 
 void logStatusSummary(bool published, DeviceMode modeValue, bool movingValue) {
   const unsigned long now = millis();
-  if (lastStatusLogMs != 0 && now - lastStatusLogMs < STATUS_INTERVAL_MS) {
+  const unsigned long logIntervalMs = getStatusLogIntervalMs(movingValue);
+  if (lastStatusLogMs != 0 && now - lastStatusLogMs < logIntervalMs) {
     return;
   }
 
@@ -910,7 +1063,7 @@ void publishStatus(bool forceLog) {
     return;
   }
 
-  char payload[1280];
+  char payload[1536];
   const bool movingNow = isMoving();
   const DeviceMode reportedMode =
     movingNow ? DEVICE_MODE_MOVING : deviceMode;
@@ -1008,7 +1161,9 @@ void handleSetPercentCommand(int nextPercent, const char* source) {
   Serial.print(" targetSteps=");
   Serial.println(targetSteps);
 
+  setStepperOutputsEnabled(true);
   stepper.moveTo(targetSteps);
+  syncStepperPowerState();
   capturePositionSnapshot(true);
   savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
   setDeviceMode(
@@ -1063,7 +1218,9 @@ void handleNudgeCommand(bool opening, int requestedAmount, const char* source) {
   Serial.print(" targetSteps=");
   Serial.println(targetSteps);
 
+  setStepperOutputsEnabled(true);
   stepper.moveTo(targetSteps);
+  syncStepperPowerState();
   capturePositionSnapshot(true);
   savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
   setDeviceMode(
@@ -1088,7 +1245,9 @@ void handleSetCurrentAsClosedCommand(const char* source) {
   calibrationComplete = false;
   positionVerified = true;
   setPositionEstimateState(POSITION_ESTIMATE_TRACKED);
+  setStepperOutputsEnabled(true);
   stepper.moveTo(calibratedClosedPositionSteps);
+  syncStepperPowerState();
   targetPercent = 0;
   rememberCalibrationAction("SET_CURRENT_AS_CLOSED");
   syncMovementLockedReason();
@@ -1120,7 +1279,9 @@ void handleSetCurrentAsOpenCommand(const char* source) {
     CALIBRATION_ENDPOINT_CLOSED | CALIBRATION_ENDPOINT_OPEN;
   positionVerified = true;
   setPositionEstimateState(POSITION_ESTIMATE_TRACKED);
+  setStepperOutputsEnabled(true);
   stepper.moveTo(calibratedOpenPositionSteps);
+  syncStepperPowerState();
   targetPercent = 100;
   rememberCalibrationAction("SET_CURRENT_AS_OPEN");
   applyMotionProfile();
@@ -1178,7 +1339,9 @@ void handleSetDirectionCommand(bool nextDirectionInverted, const char* source) {
   setPositionEstimateState(POSITION_ESTIMATE_NEEDS_VERIFICATION);
   calibrationComplete = false;
   stepper.setCurrentPosition(0);
+  setStepperOutputsEnabled(true);
   stepper.moveTo(0);
+  syncStepperPowerState();
   targetPercent = 0;
   rememberCalibrationAction(
     nextDirectionInverted ? "SET_DIRECTION_REVERSED" : "SET_DIRECTION_NORMAL");
@@ -1203,6 +1366,7 @@ void handleLockMovementCommand(const char* source) {
   movementLocked = true;
   rememberCalibrationAction("LOCK_MOVEMENT");
   stepper.stop();
+  syncStepperPowerState();
   updateTargetPercentFromStepper();
   syncMovementLockedReason();
   setDeviceMode(isMoving() ? DEVICE_MODE_MOVING : getIdleModeFromConnectivity());
@@ -1227,6 +1391,7 @@ void handleStopCommand(const char* source) {
   Serial.println(stepper.distanceToGo());
 
   stepper.stop();
+  syncStepperPowerState();
   updateTargetPercentFromStepper();
   syncMovementLockedReason();
   setDeviceMode(isMoving() ? DEVICE_MODE_MOVING : getIdleModeFromConnectivity());
@@ -1370,8 +1535,17 @@ bool fetchOtaManifest(OtaManifest* manifest) {
   manifest->latestVersion = String(manifestDoc["latestVersion"] | "");
   manifest->board = String(manifestDoc["board"] | "");
   manifest->channel = String(manifestDoc["channel"] | "");
+  manifest->autoUpdateEnabled = manifestDoc["autoUpdateEnabled"] | false;
+  manifest->autoUpdateChannel =
+    String(manifestDoc["autoUpdateChannel"] | "stable");
   manifest->artifactUrl = String(manifestDoc["artifactUrl"] | "");
   manifest->sha256 = normalizeSha256(String(manifestDoc["sha256"] | ""));
+
+  otaAutoUpdateEnabled = manifest->autoUpdateEnabled;
+  otaAutoUpdateChannel =
+    manifest->autoUpdateChannel.length() > 0
+      ? manifest->autoUpdateChannel
+      : "stable";
 
   if (manifestDoc["sizeBytes"].is<long>()) {
     manifest->sizeBytes = manifestDoc["sizeBytes"].as<long>();
@@ -1386,6 +1560,13 @@ bool fetchOtaManifest(OtaManifest* manifest) {
   Serial.print(" latest=");
   Serial.print(
     manifest->latestVersion.length() > 0 ? manifest->latestVersion : "none");
+  Serial.print(" auto=");
+  Serial.print(manifest->autoUpdateEnabled ? "true" : "false");
+  Serial.print(" channel=");
+  Serial.print(
+    manifest->autoUpdateChannel.length() > 0
+      ? manifest->autoUpdateChannel
+      : "stable");
   Serial.print(" board=");
   Serial.println(manifest->board.length() > 0 ? manifest->board : "unknown");
 
@@ -1566,8 +1747,10 @@ bool installFirmware(
   return true;
 }
 
-bool checkForUpdate() {
-  Serial.println("OTA step: checkForUpdate()");
+bool checkForUpdate(bool autoCheck) {
+  Serial.print("OTA step: checkForUpdate(");
+  Serial.print(autoCheck ? "auto" : "manual");
+  Serial.println(")");
 
   if (!ENABLE_OTA_UPDATES) {
     Serial.println("OTA is disabled in config.h.");
@@ -1583,6 +1766,15 @@ bool checkForUpdate() {
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("OTA check failed: WiFi is not connected.");
+    if (autoCheck) {
+      reportUpdateEvent(
+        "update_not_available",
+        FIRMWARE_VERSION,
+        FIRMWARE_VERSION,
+        "Auto-check skipped because WiFi is not connected"
+      );
+      return false;
+    }
     setOtaState(OTA_STATE_FAILED, "", "WiFi not connected");
     reportUpdateEvent(
       "update_failed",
@@ -1595,6 +1787,15 @@ bool checkForUpdate() {
 
   if (isMoving()) {
     Serial.println("OTA check refused: motor is moving.");
+    if (autoCheck) {
+      reportUpdateEvent(
+        "update_blocked_motor_moving",
+        FIRMWARE_VERSION,
+        FIRMWARE_VERSION,
+        "Auto-check skipped because the motor is moving"
+      );
+      return false;
+    }
     setOtaState(OTA_STATE_FAILED, "", "Motor is moving");
     reportUpdateEvent(
       "update_blocked_motor_moving",
@@ -1627,6 +1828,18 @@ bool checkForUpdate() {
       FIRMWARE_VERSION,
       manifest.latestVersion.length() > 0 ? manifest.latestVersion : FIRMWARE_VERSION,
       "Manifest reported no update"
+    );
+    return false;
+  }
+
+  if (autoCheck && !manifest.autoUpdateEnabled) {
+    Serial.println("OTA auto-check found an update, but auto updates are off.");
+    setOtaState(OTA_STATE_IDLE, manifest.latestVersion, "");
+    reportUpdateEvent(
+      "update_not_available",
+      FIRMWARE_VERSION,
+      manifest.latestVersion,
+      "Auto update is disabled for this device"
     );
     return false;
   }
@@ -1737,7 +1950,49 @@ void handleCheckUpdateCommand(const char* source) {
   Serial.print("Command received: type=CHECK_UPDATE source=");
   Serial.println(source);
 
-  if (!checkForUpdate()) {
+  if (!checkForUpdate(false)) {
+    publishStatus(true);
+  }
+}
+
+bool otaCheckInProgress() {
+  return otaState == OTA_STATE_CHECKING_MANIFEST ||
+         otaState == OTA_STATE_UPDATE_AVAILABLE ||
+         otaState == OTA_STATE_DOWNLOADING ||
+         otaState == OTA_STATE_VERIFYING_HASH ||
+         otaState == OTA_STATE_INSTALLING ||
+         otaState == OTA_STATE_SUCCESS_PENDING_REBOOT ||
+         otaState == OTA_STATE_REBOOTING;
+}
+
+void maybeRunAutoUpdateCheck() {
+  if (!ENABLE_OTA_UPDATES || setupPortalActive || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  if (isMoving() || otaCheckInProgress()) {
+    return;
+  }
+
+  const unsigned long now = millis();
+  const unsigned long autoCheckInitialDelayMs =
+    OTA_AUTO_CHECK_INITIAL_DELAY_MS + otaAutoCheckJitterMs;
+  const unsigned long autoCheckIntervalMs =
+    OTA_AUTO_CHECK_INTERVAL_MS + otaAutoCheckJitterMs;
+
+  if (now - bootStartedMs < autoCheckInitialDelayMs) {
+    return;
+  }
+
+  if (
+    lastAutoUpdateCheckMs != 0 &&
+    now - lastAutoUpdateCheckMs < autoCheckIntervalMs
+  ) {
+    return;
+  }
+
+  lastAutoUpdateCheckMs = now;
+  if (!checkForUpdate(true)) {
     publishStatus(true);
   }
 }
@@ -1819,7 +2074,7 @@ void startFactorySetupPortal(const String& reason) {
   setupPortalMessage = reason;
 
   WiFi.disconnect();
-  WiFi.mode(WIFI_AP_STA);
+  applyWiFiConnectionProfile(true);
 
   if (!setupPortalApStarted) {
     if (strlen(SETUP_AP_PASSWORD) == 0) {
@@ -1865,6 +2120,8 @@ void stopFactorySetupPortalIfNeeded() {
     WiFi.softAPdisconnect(true);
     setupPortalApStarted = false;
   }
+
+  applyWiFiConnectionProfile(localFallbackApStarted);
 }
 
 void handleSetupPortalSave() {
@@ -1998,7 +2255,7 @@ void handleLocalRoot() {
 }
 
 void handleLocalStatus() {
-  char payload[1280];
+  char payload[1536];
   const size_t payloadLength = buildStatusPayload(
     payload,
     sizeof(payload),
@@ -2094,7 +2351,7 @@ void startLocalFallbackAccessPointIfNeeded() {
   }
 
   Serial.println("Starting local fallback access point...");
-  WiFi.mode(WIFI_AP_STA);
+  applyWiFiConnectionProfile(true);
 
   if (!WiFi.softAP(LOCAL_FALLBACK_AP_SSID, LOCAL_FALLBACK_AP_PASSWORD)) {
     Serial.println("Failed to start local fallback access point.");
@@ -2155,7 +2412,7 @@ void beginWiFiConnection() {
 
   setDeviceMode(DEVICE_MODE_WIFI_CONNECTING);
 
-  WiFi.mode((localFallbackApStarted || setupPortalApStarted) ? WIFI_AP_STA : WIFI_STA);
+  applyWiFiConnectionProfile(localFallbackApStarted || setupPortalApStarted);
   WiFi.begin(runtimeWifiSsid.c_str(), runtimeWifiPassword.c_str());
 
   wifiConnectInProgress = true;
@@ -2232,7 +2489,7 @@ bool connectMqtt() {
   lastMqttRetryMs = now;
   setDeviceMode(DEVICE_MODE_MQTT_CONNECTING);
 
-  char offlinePayload[1280];
+  char offlinePayload[1536];
   const size_t offlinePayloadLength = buildStatusPayload(
     offlinePayload,
     sizeof(offlinePayload),
@@ -2381,17 +2638,23 @@ void setup() {
 
   bootStartedMs = millis();
   lastCloudHealthyMs = bootStartedMs;
+  otaAutoCheckJitterMs =
+    OTA_AUTO_CHECK_JITTER_MS > 0
+      ? static_cast<unsigned long>(ESP.getEfuseMac() % (OTA_AUTO_CHECK_JITTER_MS + 1UL))
+      : 0;
 
   Serial.println("Smart Shutter MVP booting...");
   setDeviceMode(DEVICE_MODE_BOOTING);
 
   // Absolute position is still estimated in software only. Calibration keeps
   // the saved travel range, but manual movement can still desync live percent.
+  resolveRuntimeWiFiCredentials();
   resolvedDeviceId = resolveDeviceId();
   resolvedMqttClientId = resolveMqttClientId();
-  resolvedCommandTopic = resolveTopic(COMMAND_TOPIC, "commands");
-  resolvedStatusTopic = resolveTopic(STATUS_TOPIC, "status");
-  resolveRuntimeWiFiCredentials();
+  resolvedCommandTopic =
+    resolveTopic(COMMAND_TOPIC, storedCommandTopic, "commands");
+  resolvedStatusTopic =
+    resolveTopic(STATUS_TOPIC, storedStatusTopic, "status");
   setupPortalSsid = String(SETUP_AP_SSID_PREFIX) + getMacSuffixUpper();
 
   Serial.print("Resolved deviceId: ");
@@ -2409,6 +2672,17 @@ void setup() {
   stepper.moveTo(lastPersistedPositionSteps);
   updateTargetPercentFromStepper();
   syncMovementLockedReason();
+  syncStepperPowerState();
+
+  if (
+    storedDeviceId != resolvedDeviceId ||
+    storedMqttClientId != resolvedMqttClientId ||
+    storedCommandTopic != resolvedCommandTopic ||
+    storedStatusTopic != resolvedStatusTopic
+  ) {
+    capturePositionSnapshot(false);
+    savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
+  }
 
   // MVP only: this skips CA certificate validation so HiveMQ Cloud can be
   // reached quickly during prototyping. Replace with CA validation for any
@@ -2418,7 +2692,7 @@ void setup() {
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCallback(onMqttMessage);
   mqttClient.setBufferSize(1536);
-  mqttClient.setKeepAlive(15);
+  mqttClient.setKeepAlive(MQTT_KEEP_ALIVE_SECONDS);
 
   setOtaState(
     ENABLE_OTA_UPDATES ? OTA_STATE_IDLE : OTA_STATE_DISABLED,
@@ -2468,13 +2742,21 @@ void loop() {
       capturePositionSnapshot(false);
       savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
     }
+    syncStepperPowerState();
     setDeviceMode(movingNow ? DEVICE_MODE_MOVING : getIdleModeFromConnectivity());
     updateTargetPercentFromStepper();
     publishStatus(true);
   }
 
   const unsigned long now = millis();
-  if (mqttClient.connected() && now - lastStatusPublishMs >= STATUS_INTERVAL_MS) {
+  const unsigned long statusIntervalMs = getStatusPublishIntervalMs(movingNow);
+  if (
+    mqttClient.connected() &&
+    statusIntervalMs > 0 &&
+    now - lastStatusPublishMs >= statusIntervalMs
+  ) {
     publishStatus();
   }
+
+  maybeRunAutoUpdateCheck();
 }

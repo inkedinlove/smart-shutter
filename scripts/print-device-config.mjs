@@ -62,6 +62,9 @@ const publicAppBaseUrl =
   process.env.PUBLIC_APP_BASE_URL ||
   fileEnv.PUBLIC_APP_BASE_URL ||
   "https://your-app.example.com";
+const otaEnabled =
+  (device.board ?? "esp32") === "esp32" ||
+  (device.board ?? "esp32") === "esp8266-d1d4";
 
 const output = [
   "#pragma once",
@@ -90,9 +93,17 @@ const output = [
   `constexpr const char* STATUS_TOPIC = "${device.statusTopic}";`,
   "",
   "// OTA and app integration",
-  "#define ENABLE_OTA_UPDATES false",
+  `#define ENABLE_OTA_UPDATES ${otaEnabled ? "true" : "false"}`,
   `#define API_BASE_URL "${publicAppBaseUrl}"`,
   '#define OTA_MANIFEST_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/manifest"',
+  '#define OTA_EVENTS_PATH_TEMPLATE "/api/devices/{deviceId}/firmware/events"',
+  ...(otaEnabled
+    ? [
+        "#define OTA_AUTO_CHECK_INITIAL_DELAY_MS 300000UL",
+        "#define OTA_AUTO_CHECK_INTERVAL_MS 21600000UL",
+        "#define OTA_AUTO_CHECK_JITTER_MS 900000UL",
+      ]
+    : []),
 ];
 
 process.stdout.write(`${output.join("\n")}\n`);
