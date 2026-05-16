@@ -40,6 +40,13 @@ export const DEVICE_CLAIM_STATE_VALUES = [
 export type DeviceClaimState = (typeof DEVICE_CLAIM_STATE_VALUES)[number];
 export const DEVICE_ACTUATOR_TYPE_VALUES = ["stepper", "servo"] as const;
 export type DeviceActuatorType = (typeof DEVICE_ACTUATOR_TYPE_VALUES)[number];
+export const POSITION_ESTIMATE_STATE_VALUES = [
+  "tracked",
+  "restored",
+  "needs_verification",
+] as const;
+export type PositionEstimateState =
+  (typeof POSITION_ESTIMATE_STATE_VALUES)[number];
 
 export const DEFAULT_NUDGE_AMOUNT = 2;
 export const MAX_NUDGE_AMOUNT = 100;
@@ -147,6 +154,8 @@ export type DeviceStatus = {
   calibrationComplete?: boolean;
   fullTravelReady?: boolean;
   directionInverted?: boolean;
+  positionEstimateState?: PositionEstimateState;
+  positionEstimateReason?: string;
   safetyMode?: boolean;
   allowedMaxPercentStep?: number;
   lastCalibrationAction?: string;
@@ -170,6 +179,8 @@ export type DeviceDiagnostics = {
   setupMode: boolean | null;
   safetyMode: boolean | null;
   calibrationComplete: boolean | null;
+  positionEstimateState: PositionEstimateState | null;
+  positionEstimateReason: string | null;
   otaState: OtaState | null;
   otaLastError: string | null;
   wifiConnected: boolean | null;
@@ -201,6 +212,30 @@ export function isDeviceActuatorType(value: unknown): value is DeviceActuatorTyp
     typeof value === "string" &&
     DEVICE_ACTUATOR_TYPE_VALUES.includes(value as DeviceActuatorType)
   );
+}
+
+export function isPositionEstimateState(
+  value: unknown,
+): value is PositionEstimateState {
+  return (
+    typeof value === "string" &&
+    POSITION_ESTIMATE_STATE_VALUES.includes(value as PositionEstimateState)
+  );
+}
+
+export function formatPositionEstimateState(
+  value: PositionEstimateState | null | undefined,
+): string {
+  switch (value) {
+    case "tracked":
+      return "Tracked";
+    case "restored":
+      return "Restored";
+    case "needs_verification":
+      return "Needs verification";
+    default:
+      return "Unknown";
+  }
 }
 
 export function normalizeReportedBoardValue(
@@ -337,6 +372,8 @@ export function createDefaultDeviceStatus(
     calibrationComplete: undefined,
     fullTravelReady: undefined,
     directionInverted: undefined,
+    positionEstimateState: undefined,
+    positionEstimateReason: undefined,
     safetyMode: undefined,
     allowedMaxPercentStep: undefined,
     lastCalibrationAction: undefined,
@@ -372,6 +409,8 @@ export function createDeviceDiagnostics(
     setupMode: status?.setupMode ?? null,
     safetyMode: status?.safetyMode ?? null,
     calibrationComplete: status?.calibrationComplete ?? null,
+    positionEstimateState: status?.positionEstimateState ?? null,
+    positionEstimateReason: status?.positionEstimateReason ?? null,
     otaState:
       status?.otaState ?? (status?.otaEnabled === false ? "DISABLED" : null),
     otaLastError: status?.otaLastError ?? null,

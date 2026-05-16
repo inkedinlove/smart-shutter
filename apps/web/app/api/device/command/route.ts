@@ -45,6 +45,10 @@ function getAllowedMaxPercentStep(status: DeviceStatus | null): number {
   return DEFAULT_SAFE_ALLOWED_MAX_PERCENT_STEP;
 }
 
+function positionNeedsVerification(status: DeviceStatus | null): boolean {
+  return status?.positionEstimateState === "needs_verification";
+}
+
 function requiresLiveStatus(commandType: string): boolean {
   return commandType !== "STOP" && commandType !== "CHECK_UPDATE";
 }
@@ -249,6 +253,21 @@ export async function POST(request: Request) {
     }
 
     const normalizedValue = Math.round(value);
+
+    if (positionNeedsVerification(liveStatus)) {
+      await auditCommand({
+        deviceId: device.deviceId,
+        actorProfileId,
+        commandType,
+        result: "blocked_position_verification_required",
+      });
+
+      return apiError(
+        liveStatus?.positionEstimateReason ??
+          "Verify the shutter's current position with small moves before sending a percentage command.",
+        409,
+      );
+    }
 
     if (liveStatus?.safetyMode === true && liveStatus.fullTravelReady !== true) {
       if (normalizedValue === 100) {

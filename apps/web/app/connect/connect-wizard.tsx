@@ -17,6 +17,7 @@ import {
   createDeviceDiagnostics,
   type DeviceDiagnostics,
   formatDeviceActuatorType,
+  formatPositionEstimateState,
   formatReportedCapabilities,
   type DeviceClaimState,
   type DeviceCommand,
@@ -858,6 +859,8 @@ export default function ConnectWizard() {
   const safetyMode = selectedDeviceStatus?.safetyMode === true;
   const calibrationComplete = selectedDeviceStatus?.calibrationComplete === true;
   const fullTravelReady = selectedDeviceStatus?.fullTravelReady === true;
+  const positionNeedsVerification =
+    selectedDeviceStatus?.positionEstimateState === "needs_verification";
   const allowedMaxPercentStep =
     selectedDeviceStatus?.allowedMaxPercentStep ??
     DEFAULT_SAFE_ALLOWED_MAX_PERCENT_STEP;
@@ -1006,6 +1009,15 @@ export default function ConnectWizard() {
       };
     }
 
+    if (positionNeedsVerification) {
+      return {
+        title: "Verify the current position first",
+        body:
+          selectedDeviceStatus.positionEstimateReason ??
+          "Use small moves to reach a known endpoint, then save closed or open again.",
+      };
+    }
+
     if (!fullTravelReady) {
       return {
         title: "Save closed and open first",
@@ -1017,7 +1029,7 @@ export default function ConnectWizard() {
         title: "Setup looks good",
         body: "The device is online and the saved endpoints now define the full 0-100 range.",
       };
-  }, [fullTravelReady, selectedDeviceStatus]);
+  }, [fullTravelReady, positionNeedsVerification, selectedDeviceStatus]);
 
   const calibrationGuideContent = useMemo(() => {
     if (!canCalibrate) {
@@ -1289,6 +1301,16 @@ export default function ConnectWizard() {
                     value={reportedDirectionLabel}
                   />
                   <SummaryCard
+                    label="Position state"
+                    meta={
+                      selectedDeviceStatus?.positionEstimateReason ??
+                      "How the current percentage estimate was derived"
+                    }
+                    value={formatPositionEstimateState(
+                      diagnosticsSnapshot?.positionEstimateState,
+                    )}
+                  />
+                  <SummaryCard
                     label="Registered board"
                     meta="Cloud registry"
                     value={formatDeviceBoardLabel(diagnosticsSnapshot?.registeredBoard)}
@@ -1414,6 +1436,18 @@ export default function ConnectWizard() {
               </div>
               <p className="mt-2 text-sm leading-7">
                 Save both the closed and open positions before running larger movement commands.
+              </p>
+            </div>
+          ) : null}
+
+          {selectedDeviceStatus?.online && positionNeedsVerification ? (
+            <div className="mt-6 rounded-[1rem] border border-amber-300/20 bg-amber-300/10 p-5 text-amber-50">
+              <div className="text-xs uppercase tracking-[0.24em] text-amber-100/80">
+                Position needs verification
+              </div>
+              <p className="mt-2 text-sm leading-7">
+                {selectedDeviceStatus.positionEstimateReason ??
+                  "Use small moves to reach a known endpoint, then save closed or open again before using larger percentage commands."}
               </p>
             </div>
           ) : null}

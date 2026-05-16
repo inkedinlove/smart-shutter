@@ -61,6 +61,10 @@ function getAllowedMaxPercentStep(status: DeviceStatus | null): number {
   return DEFAULT_SAFE_ALLOWED_MAX_PERCENT_STEP;
 }
 
+function positionNeedsVerification(status: DeviceStatus | null): boolean {
+  return status?.positionEstimateState === "needs_verification";
+}
+
 function getCurrentPercent(status: DeviceStatus | null): number {
   if (typeof status?.estimatedPercent === "number") {
     return status.estimatedPercent;
@@ -484,6 +488,24 @@ export async function POST(request: Request) {
           ),
         );
       }
+    }
+
+    if (positionNeedsVerification(liveStatus)) {
+      await auditAlexaCommand({
+        deviceId: device.deviceId,
+        actorProfileId: auth.profileId,
+        commandType: commandInput.type,
+        result: "blocked_position_verification_required",
+      });
+
+      return createAlexaJsonResponse(
+        buildAlexaErrorResponse(
+          "CALIBRATION_REQUIRED",
+          directive,
+          liveStatus.positionEstimateReason ??
+            "The shutter position must be verified with small moves before Alexa can send a percentage command.",
+        ),
+      );
     }
 
     const command = buildSetPercentCommand(commandInput);

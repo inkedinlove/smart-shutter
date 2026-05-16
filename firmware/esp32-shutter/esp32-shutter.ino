@@ -113,6 +113,12 @@ enum OtaState {
   OTA_STATE_SUCCESS_PENDING_REBOOT,
 };
 
+enum PositionEstimateState {
+  POSITION_ESTIMATE_TRACKED,
+  POSITION_ESTIMATE_RESTORED,
+  POSITION_ESTIMATE_NEEDS_VERIFICATION,
+};
+
 struct OtaManifest {
   bool updateAvailable = false;
   String currentVersion;
@@ -128,6 +134,11 @@ struct OtaDownloadResult {
   String computedSha256;
   size_t downloadedBytes = 0;
 };
+
+constexpr long MIN_CALIBRATION_SPAN_STEPS = 64L;
+constexpr uint8_t CALIBRATION_ENDPOINT_CLOSED = 0x01;
+constexpr uint8_t CALIBRATION_ENDPOINT_OPEN = 0x02;
+constexpr uint8_t PERSISTED_SETTINGS_VERSION = 1;
 
 WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
@@ -153,11 +164,21 @@ bool localFallbackServerStarted = false;
 bool localFallbackApStarted = false;
 bool setupPortalActive = false;
 bool setupPortalApStarted = false;
+bool directionInverted = INVERT_DIRECTION;
+bool positionVerified = false;
+bool positionRecoveredFromInterruptedMotion = false;
 bool calibrationComplete = !SAFE_SETUP_MODE;
 bool movementLocked = false;
 
 int targetPercent = 0;
+long calibratedClosedPositionSteps = 0;
+long calibratedOpenPositionSteps = TRAVEL_STEPS;
+long lastPersistedPositionSteps = 0;
+long lastPersistedTargetSteps = 0;
+uint8_t calibrationEndpointMask = 0;
 OtaState otaState = ENABLE_OTA_UPDATES ? OTA_STATE_IDLE : OTA_STATE_DISABLED;
+PositionEstimateState positionEstimateState =
+  POSITION_ESTIMATE_NEEDS_VERIFICATION;
 String otaLastError = "";
 String otaTargetVersion = "";
 String resolvedDeviceId = "";
@@ -224,6 +245,31 @@ const char* otaStateToString(OtaState state) {
   }
 }
 
+const char* positionEstimateStateToString(PositionEstimateState state) {
+  switch (state) {
+    case POSITION_ESTIMATE_TRACKED:
+      return "tracked";
+    case POSITION_ESTIMATE_RESTORED:
+      return "restored";
+    case POSITION_ESTIMATE_NEEDS_VERIFICATION:
+      return "needs_verification";
+    default:
+      return "needs_verification";
+  }
+}
+
+bool isPositionEstimateUncertain() {
+  return positionEstimateState == POSITION_ESTIMATE_NEEDS_VERIFICATION;
+}
+
+void setPositionEstimateState(PositionEstimateState nextState) {
+  positionEstimateState = nextState;
+
+  if (nextState != POSITION_ESTIMATE_NEEDS_VERIFICATION) {
+    positionRecoveredFromInterruptedMotion = false;
+  }
+}
+
 void setDeviceMode(DeviceMode nextMode) {
   if (deviceMode == nextMode) {
     return;
@@ -234,16 +280,64 @@ void setDeviceMode(DeviceMode nextMode) {
   Serial.println(deviceModeToString(deviceMode));
 }
 
+long scaleMagnitudeByPercent(long magnitudeSteps, int percent) {
+  const long clampedMagnitude = max(0L, magnitudeSteps);
+  const int clampedPercent = constrain(percent, 0, 100);
+  return (clampedMagnitude * static_cast<long>(clampedPercent) + 50L) / 100L;
+}
+
+long getCalibratedSpanSteps() {
+  long span = calibratedOpenPositionSteps - calibratedClosedPositionSteps;
+
+  if (span != 0) {
+    return span;
+  }
+
+  return directionInverted ? -TRAVEL_STEPS : TRAVEL_STEPS;
+}
+
+bool hasMarkedClosedEndpoint() {
+  return (calibrationEndpointMask & CALIBRATION_ENDPOINT_CLOSED) != 0;
+}
+
+bool hasMarkedOpenEndpoint() {
+  return (calibrationEndpointMask & CALIBRATION_ENDPOINT_OPEN) != 0;
+}
+
+bool hasMeaningfulCalibrationSpan() {
+  return labs(calibratedOpenPositionSteps - calibratedClosedPositionSteps) >=
+         MIN_CALIBRATION_SPAN_STEPS;
+}
+
+bool hasFullTravelCalibration() {
+  return hasMarkedClosedEndpoint() &&
+         hasMarkedOpenEndpoint() &&
+         hasMeaningfulCalibrationSpan();
+}
+
+long getCalibrationTravelSpanMagnitude() {
+  const long spanMagnitude = labs(getCalibratedSpanSteps());
+  return spanMagnitude > 0 ? spanMagnitude : TRAVEL_STEPS;
+}
+
+long getOpenDirectionStepSign() {
+  return getCalibratedSpanSteps() >= 0 ? 1L : -1L;
+}
+
 int stepsToPercent(long steps) {
-  // Position is estimated in software because the MVP has no sensors,
-  // encoders, or limit switches. Manual shutter movement can desync this
-  // estimate until a future calibration flow is added.
-  const long clampedSteps = constrain(steps, 0L, TRAVEL_STEPS);
-  const float ratio =
-    static_cast<float>(clampedSteps) / static_cast<float>(TRAVEL_STEPS);
-  const int effectivePercent = static_cast<int>(round(ratio * 100.0f));
+  // Absolute position is still estimated in software only, but calibration
+  // saves the closed/open range so the device keeps its setup after reboot.
+  const long closedSteps = calibratedClosedPositionSteps;
+  const long spanSteps = getCalibratedSpanSteps();
+  const long spanMagnitude = max(1L, labs(spanSteps));
+  const long relativeSteps = steps - closedSteps;
+  long progressSteps = spanSteps >= 0 ? relativeSteps : -relativeSteps;
+  progressSteps = constrain(progressSteps, 0L, spanMagnitude);
+  const int effectivePercent = static_cast<int>(
+    (progressSteps * 100L + spanMagnitude / 2L) / spanMagnitude
+  );
   const int mappedPercent =
-    INVERT_DIRECTION ? 100 - effectivePercent : effectivePercent;
+    directionInverted ? 100 - effectivePercent : effectivePercent;
 
   return constrain(mappedPercent, 0, 100);
 }
@@ -251,10 +345,12 @@ int stepsToPercent(long steps) {
 long percentToSteps(int percent) {
   const int clampedPercent = constrain(percent, 0, 100);
   const int effectivePercent =
-    INVERT_DIRECTION ? 100 - clampedPercent : clampedPercent;
-  const float ratio = static_cast<float>(effectivePercent) / 100.0f;
-
-  return lround(ratio * static_cast<float>(TRAVEL_STEPS));
+    directionInverted ? 100 - clampedPercent : clampedPercent;
+  const long spanSteps = getCalibratedSpanSteps();
+  const long offsetMagnitude =
+    scaleMagnitudeByPercent(labs(spanSteps), effectivePercent);
+  const long signedOffset = spanSteps >= 0 ? offsetMagnitude : -offsetMagnitude;
+  return calibratedClosedPositionSteps + signedOffset;
 }
 
 bool isMoving() {
@@ -282,11 +378,19 @@ bool isSafetyModeActive() {
 }
 
 bool isCalibrationRestricted() {
-  return SAFE_SETUP_MODE && !calibrationComplete;
+  return SAFE_SETUP_MODE && !hasFullTravelCalibration();
 }
 
 int getAllowedMaxPercentStep() {
   return isCalibrationRestricted() ? SAFE_ALLOWED_MAX_PERCENT_STEP : 100;
+}
+
+long getCalibrationJogSteps(int amount) {
+  const long baseSpan = getCalibrationTravelSpanMagnitude();
+  const long jogSteps =
+    scaleMagnitudeByPercent(baseSpan, constrain(amount, 1, 100));
+
+  return max(1L, jogSteps);
 }
 
 void syncMovementLockedReason() {
@@ -372,42 +476,206 @@ String resolveTopic(const char* configuredTopic, const char* topicSuffix) {
   return topic;
 }
 
-void loadStoredWiFiCredentials(String* ssid, String* password) {
+void capturePositionSnapshot(bool movementInProgress) {
+  lastPersistedPositionSteps = stepper.currentPosition();
+  lastPersistedTargetSteps =
+    movementInProgress ? stepper.targetPosition() : stepper.currentPosition();
+}
+
+String buildPositionEstimateReason() {
+  if (positionEstimateState == POSITION_ESTIMATE_TRACKED) {
+    return "";
+  }
+
+  if (positionEstimateState == POSITION_ESTIMATE_RESTORED) {
+    return "Restored from the last saved stable position after reboot.";
+  }
+
+  String reason =
+    "Use small moves to reach a known endpoint, then save closed or open again.";
+
+  if (positionRecoveredFromInterruptedMotion) {
+    reason =
+      "Reboot interrupted movement. Last saved stable position was ";
+    reason += stepsToPercent(lastPersistedPositionSteps);
+    reason += "% and the interrupted target was ";
+    reason += stepsToPercent(lastPersistedTargetSteps);
+    reason += "%. Use small moves to reach a known endpoint, then save closed or open again.";
+    return reason;
+  }
+
+  if (!positionVerified) {
+    return "No verified saved position is available yet. Use small moves to reach a known endpoint, then save closed or open.";
+  }
+
+  return reason;
+}
+
+void resetCalibrationRangeToDefaults() {
+  calibratedClosedPositionSteps = 0;
+  calibratedOpenPositionSteps = directionInverted ? -TRAVEL_STEPS : TRAVEL_STEPS;
+  calibrationEndpointMask = 0;
+  calibrationComplete = !SAFE_SETUP_MODE;
+}
+
+bool savePersistedDeviceSettings(const String& ssid, const String& password) {
+  preferences.begin("smart-shutter", false);
+  const size_t storedSsidLength = preferences.putString("wifi_ssid", ssid);
+  const size_t storedPasswordLength =
+    preferences.putString("wifi_password", password);
+  const bool storedClosedPosition =
+    preferences.putLong("closed_steps", calibratedClosedPositionSteps) > 0;
+  const bool storedOpenPosition =
+    preferences.putLong("open_steps", calibratedOpenPositionSteps) > 0;
+  const bool storedCalibrationComplete =
+    preferences.putBool("cal_complete", calibrationComplete) > 0;
+  const bool storedDirection =
+    preferences.putBool("dir_inverted", directionInverted) > 0;
+  const bool storedEndpointMask =
+    preferences.putUChar("endpoints", calibrationEndpointMask) > 0;
+  const bool storedPositionSteps =
+    preferences.putLong("pos_steps", lastPersistedPositionSteps) > 0;
+  const bool storedTargetSteps =
+    preferences.putLong("pos_target", lastPersistedTargetSteps) > 0;
+  const bool storedPositionVerified =
+    preferences.putBool("pos_verified", positionVerified) > 0;
+  const bool storedMotionState =
+    preferences.putBool("pos_moving", isMoving()) > 0;
+  const bool storedVersion =
+    preferences.putUChar("settings_v", PERSISTED_SETTINGS_VERSION) > 0;
+  preferences.end();
+
+  const bool storedSsid = ssid.length() == 0 || storedSsidLength > 0;
+  const bool storedPassword = password.length() == 0 || storedPasswordLength > 0;
+
+  return storedSsid &&
+         storedPassword &&
+         storedClosedPosition &&
+         storedOpenPosition &&
+         storedCalibrationComplete &&
+         storedDirection &&
+         storedEndpointMask &&
+         storedPositionSteps &&
+         storedTargetSteps &&
+         storedPositionVerified &&
+         storedMotionState &&
+         storedVersion;
+}
+
+void loadStoredDeviceSettings(String* ssid, String* password) {
   if (ssid == nullptr || password == nullptr) {
     return;
   }
 
+  directionInverted = INVERT_DIRECTION;
+  resetCalibrationRangeToDefaults();
+  positionVerified = false;
+  positionRecoveredFromInterruptedMotion = false;
+  lastPersistedPositionSteps = 0;
+  lastPersistedTargetSteps = 0;
   preferences.begin("smart-shutter", true);
   *ssid = preferences.getString("wifi_ssid", "");
   *password = preferences.getString("wifi_password", "");
+  const uint8_t storedVersion = preferences.getUChar("settings_v", 0);
+  const bool hasStoredPosition = preferences.isKey("pos_steps");
+  const bool storedMotionInProgress = preferences.getBool("pos_moving", false);
+
+  if (storedVersion >= PERSISTED_SETTINGS_VERSION) {
+    directionInverted = preferences.getBool("dir_inverted", INVERT_DIRECTION);
+    calibratedClosedPositionSteps = preferences.getLong("closed_steps", 0L);
+    calibratedOpenPositionSteps = preferences.getLong(
+      "open_steps",
+      directionInverted ? -TRAVEL_STEPS : TRAVEL_STEPS
+    );
+    calibrationEndpointMask = preferences.getUChar("endpoints", 0U);
+    calibrationComplete =
+      SAFE_SETUP_MODE ? preferences.getBool("cal_complete", false) : true;
+    positionVerified = preferences.getBool("pos_verified", false);
+    lastPersistedPositionSteps = preferences.getLong("pos_steps", 0L);
+    lastPersistedTargetSteps = preferences.getLong(
+      "pos_target",
+      lastPersistedPositionSteps
+    );
+
+    if (storedMotionInProgress) {
+      setPositionEstimateState(POSITION_ESTIMATE_NEEDS_VERIFICATION);
+      positionRecoveredFromInterruptedMotion = true;
+    } else if (hasStoredPosition && positionVerified) {
+      setPositionEstimateState(POSITION_ESTIMATE_RESTORED);
+    } else {
+      setPositionEstimateState(POSITION_ESTIMATE_NEEDS_VERIFICATION);
+    }
+  }
   preferences.end();
+
+  if (calibrationEndpointMask == 0 &&
+      calibrationComplete &&
+      hasMeaningfulCalibrationSpan()) {
+    calibrationEndpointMask =
+      CALIBRATION_ENDPOINT_CLOSED | CALIBRATION_ENDPOINT_OPEN;
+  }
+
+  if (!hasMeaningfulCalibrationSpan()) {
+    resetCalibrationRangeToDefaults();
+  }
+
+  if (!hasStoredPosition) {
+    lastPersistedPositionSteps = calibratedClosedPositionSteps;
+    lastPersistedTargetSteps = calibratedClosedPositionSteps;
+    setPositionEstimateState(POSITION_ESTIMATE_NEEDS_VERIFICATION);
+  }
 }
 
 bool saveStoredWiFiCredentials(const String& ssid, const String& password) {
-  preferences.begin("smart-shutter", false);
-  const bool storedSsid = preferences.putString("wifi_ssid", ssid) > 0;
-  const size_t storedPasswordLength =
-    preferences.putString("wifi_password", password);
-  preferences.end();
+  capturePositionSnapshot(isMoving());
+  const bool committed = savePersistedDeviceSettings(ssid, password);
 
-  if (storedSsid && (password.length() == 0 || storedPasswordLength > 0)) {
+  if (committed) {
     Serial.print("WiFi credentials saved for SSID: ");
     Serial.println(ssid);
   } else {
     Serial.println("Failed to save WiFi credentials.");
   }
 
-  return storedSsid && (password.length() == 0 || storedPasswordLength > 0);
+  return committed;
+}
+
+bool saveCalibrationSettings() {
+  capturePositionSnapshot(false);
+  const bool committed =
+    savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
+
+  if (committed) {
+    Serial.print("Calibration saved: closed=");
+    Serial.print(calibratedClosedPositionSteps);
+    Serial.print(" open=");
+    Serial.print(calibratedOpenPositionSteps);
+    Serial.print(" directionInverted=");
+    Serial.print(directionInverted ? "true" : "false");
+    Serial.print(" endpoints=");
+    Serial.print(static_cast<int>(calibrationEndpointMask));
+    Serial.print(" complete=");
+    Serial.println(calibrationComplete ? "true" : "false");
+  } else {
+    Serial.println("Failed to save calibration settings.");
+  }
+
+  return committed;
 }
 
 void resolveRuntimeWiFiCredentials() {
+  String storedSsid = "";
+  String storedPassword = "";
+  loadStoredDeviceSettings(&storedSsid, &storedPassword);
+
   if (hasText(WIFI_SSID)) {
     runtimeWifiSsid = WIFI_SSID;
     runtimeWifiPassword = WIFI_PASSWORD;
     return;
   }
 
-  loadStoredWiFiCredentials(&runtimeWifiSsid, &runtimeWifiPassword);
+  runtimeWifiSsid = storedSsid;
+  runtimeWifiPassword = storedPassword;
 }
 
 bool hasRuntimeWiFiCredentials() {
@@ -532,7 +800,7 @@ size_t buildStatusPayload(
   DeviceMode modeValue,
   bool movingValue
 ) {
-  StaticJsonDocument<1024> statusDoc;
+  StaticJsonDocument<1280> statusDoc;
   statusDoc["deviceId"] = resolvedDeviceId;
   statusDoc["resolvedDeviceId"] = resolvedDeviceId;
   statusDoc["setupMode"] = setupPortalActive;
@@ -555,6 +823,9 @@ size_t buildStatusPayload(
   reportedCapabilities.add("calibration");
   reportedCapabilities.add("movement_lock");
   reportedCapabilities.add("factory_setup_ap");
+  if (ENABLE_OTA_UPDATES) {
+    reportedCapabilities.add("ota");
+  }
   statusDoc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
   statusDoc["mqttConnected"] = mqttClient.connected();
   if (WiFi.status() == WL_CONNECTED) {
@@ -577,6 +848,15 @@ size_t buildStatusPayload(
     statusDoc["otaTargetVersion"] = nullptr;
   }
   statusDoc["calibrationComplete"] = calibrationComplete;
+  statusDoc["fullTravelReady"] = hasFullTravelCalibration();
+  statusDoc["directionInverted"] = directionInverted;
+  statusDoc["positionEstimateState"] =
+    positionEstimateStateToString(positionEstimateState);
+  if (positionEstimateState != POSITION_ESTIMATE_TRACKED) {
+    statusDoc["positionEstimateReason"] = buildPositionEstimateReason();
+  } else {
+    statusDoc["positionEstimateReason"] = nullptr;
+  }
   statusDoc["safetyMode"] = isSafetyModeActive();
   statusDoc["allowedMaxPercentStep"] = getAllowedMaxPercentStep();
   if (lastCalibrationAction.length() > 0) {
@@ -615,6 +895,12 @@ void logStatusSummary(bool published, DeviceMode modeValue, bool movingValue) {
   Serial.print(isSafetyModeActive() ? "true" : "false");
   Serial.print(" calibrated=");
   Serial.print(calibrationComplete ? "true" : "false");
+  Serial.print(" fullTravelReady=");
+  Serial.print(hasFullTravelCalibration() ? "true" : "false");
+  Serial.print(" direction=");
+  Serial.print(directionInverted ? "reversed" : "normal");
+  Serial.print(" positionState=");
+  Serial.print(positionEstimateStateToString(positionEstimateState));
   Serial.print(" ota=");
   Serial.println(otaStateToString(otaState));
 }
@@ -662,13 +948,21 @@ bool ensureSafeMovementAllowed(
   }
 
   if (!isCalibrationRestricted()) {
+    if (strcmp(commandType, "SET_PERCENT") == 0 && isPositionEstimateUncertain()) {
+      rejectMovementCommand(
+        commandType,
+        buildPositionEstimateReason()
+      );
+      return false;
+    }
+
     return true;
   }
 
   if (strcmp(commandType, "SET_PERCENT") == 0 && requestedPercent >= 100) {
     rejectMovementCommand(
       commandType,
-      "100% is blocked until calibration is complete."
+      "100% is blocked until closed and open are both set."
     );
     return false;
   }
@@ -676,7 +970,7 @@ bool ensureSafeMovementAllowed(
   if (requestedDelta > getAllowedMaxPercentStep()) {
     String reason = "Safe setup mode only allows ";
     reason += getAllowedMaxPercentStep();
-    reason += "% per command until calibration is complete.";
+    reason += "% per command until closed and open are both set.";
     rejectMovementCommand(commandType, reason);
     return false;
   }
@@ -715,6 +1009,8 @@ void handleSetPercentCommand(int nextPercent, const char* source) {
   Serial.println(targetSteps);
 
   stepper.moveTo(targetSteps);
+  capturePositionSnapshot(true);
+  savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
   setDeviceMode(
     targetSteps == stepper.currentPosition()
       ? getIdleModeFromConnectivity()
@@ -727,12 +1023,12 @@ void handleNudgeCommand(bool opening, int requestedAmount, const char* source) {
   const int currentPercent = stepsToPercent(stepper.currentPosition());
   const int amount =
     constrain(requestedAmount, 1, getAllowedMaxPercentStep());
+  const int requestedDelta = amount;
   const int nextPercent = constrain(
     currentPercent + (opening ? amount : -amount),
     0,
     100
   );
-  const int requestedDelta = abs(nextPercent - currentPercent);
 
   if (!ensureSafeMovementAllowed(
         opening ? "NUDGE_OPEN" : "NUDGE_CLOSE",
@@ -745,7 +1041,17 @@ void handleNudgeCommand(bool opening, int requestedAmount, const char* source) {
   rememberCalibrationAction(opening ? "NUDGE_OPEN" : "NUDGE_CLOSE");
   syncMovementLockedReason();
 
-  const long targetSteps = percentToSteps(targetPercent);
+  long targetSteps = percentToSteps(targetPercent);
+
+  if (isCalibrationRestricted()) {
+    const long jogSteps = getCalibrationJogSteps(amount);
+    const long directionSign = getOpenDirectionStepSign();
+    targetSteps =
+      stepper.currentPosition() +
+      ((opening ? 1L : -1L) * directionSign * jogSteps);
+    targetPercent = stepsToPercent(targetSteps);
+  }
+
   Serial.print("Command received: type=");
   Serial.print(opening ? "NUDGE_OPEN" : "NUDGE_CLOSE");
   Serial.print(" amount=");
@@ -758,6 +1064,8 @@ void handleNudgeCommand(bool opening, int requestedAmount, const char* source) {
   Serial.println(targetSteps);
 
   stepper.moveTo(targetSteps);
+  capturePositionSnapshot(true);
+  savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
   setDeviceMode(
     targetSteps == stepper.currentPosition()
       ? getIdleModeFromConnectivity()
@@ -771,11 +1079,20 @@ void handleSetCurrentAsClosedCommand(const char* source) {
     return;
   }
 
-  stepper.setCurrentPosition(percentToSteps(0));
-  stepper.moveTo(percentToSteps(0));
+  const long directionSign = getOpenDirectionStepSign();
+  calibratedClosedPositionSteps = stepper.currentPosition();
+  calibratedOpenPositionSteps =
+    calibratedClosedPositionSteps +
+    (directionSign * getCalibrationTravelSpanMagnitude());
+  calibrationEndpointMask = CALIBRATION_ENDPOINT_CLOSED;
+  calibrationComplete = false;
+  positionVerified = true;
+  setPositionEstimateState(POSITION_ESTIMATE_TRACKED);
+  stepper.moveTo(calibratedClosedPositionSteps);
   targetPercent = 0;
   rememberCalibrationAction("SET_CURRENT_AS_CLOSED");
   syncMovementLockedReason();
+  saveCalibrationSettings();
 
   Serial.print("Command received: type=SET_CURRENT_AS_CLOSED source=");
   Serial.println(source);
@@ -789,11 +1106,26 @@ void handleSetCurrentAsOpenCommand(const char* source) {
     return;
   }
 
-  stepper.setCurrentPosition(percentToSteps(100));
-  stepper.moveTo(percentToSteps(100));
+  calibratedOpenPositionSteps = stepper.currentPosition();
+
+  if (!hasMeaningfulCalibrationSpan()) {
+    rejectMovementCommand(
+      "SET_CURRENT_AS_OPEN",
+      "Open position must be farther away from closed."
+    );
+    return;
+  }
+
+  calibrationEndpointMask =
+    CALIBRATION_ENDPOINT_CLOSED | CALIBRATION_ENDPOINT_OPEN;
+  positionVerified = true;
+  setPositionEstimateState(POSITION_ESTIMATE_TRACKED);
+  stepper.moveTo(calibratedOpenPositionSteps);
   targetPercent = 100;
   rememberCalibrationAction("SET_CURRENT_AS_OPEN");
+  applyMotionProfile();
   syncMovementLockedReason();
+  saveCalibrationSettings();
 
   Serial.print("Command received: type=SET_CURRENT_AS_OPEN source=");
   Serial.println(source);
@@ -807,12 +1139,57 @@ void handleMarkCalibrationCompleteCommand(const char* source) {
     return;
   }
 
+  if (!hasMeaningfulCalibrationSpan()) {
+    rejectMovementCommand(
+      "MARK_CALIBRATION_COMPLETE",
+      "Set wider closed and open positions before finishing calibration."
+    );
+    return;
+  }
+
   calibrationComplete = true;
+  calibrationEndpointMask =
+    CALIBRATION_ENDPOINT_CLOSED | CALIBRATION_ENDPOINT_OPEN;
+  positionVerified = true;
+  setPositionEstimateState(POSITION_ESTIMATE_TRACKED);
   rememberCalibrationAction("MARK_CALIBRATION_COMPLETE");
   applyMotionProfile();
   syncMovementLockedReason();
+  saveCalibrationSettings();
 
   Serial.print("Command received: type=MARK_CALIBRATION_COMPLETE source=");
+  Serial.println(source);
+
+  setDeviceMode(getIdleModeFromConnectivity());
+  publishStatus(true);
+}
+
+void handleSetDirectionCommand(bool nextDirectionInverted, const char* source) {
+  if (!ensureCalibrationCommandCanRun(
+        nextDirectionInverted
+          ? "SET_DIRECTION_REVERSED"
+          : "SET_DIRECTION_NORMAL")) {
+    return;
+  }
+
+  directionInverted = nextDirectionInverted;
+  resetCalibrationRangeToDefaults();
+  positionVerified = false;
+  setPositionEstimateState(POSITION_ESTIMATE_NEEDS_VERIFICATION);
+  calibrationComplete = false;
+  stepper.setCurrentPosition(0);
+  stepper.moveTo(0);
+  targetPercent = 0;
+  rememberCalibrationAction(
+    nextDirectionInverted ? "SET_DIRECTION_REVERSED" : "SET_DIRECTION_NORMAL");
+  applyMotionProfile();
+  syncMovementLockedReason();
+  saveCalibrationSettings();
+
+  Serial.print("Command received: type=");
+  Serial.print(
+    nextDirectionInverted ? "SET_DIRECTION_REVERSED" : "SET_DIRECTION_NORMAL");
+  Serial.print(" source=");
   Serial.println(source);
 
   setDeviceMode(getIdleModeFromConnectivity());
@@ -1621,7 +1998,7 @@ void handleLocalRoot() {
 }
 
 void handleLocalStatus() {
-  char payload[1024];
+  char payload[1280];
   const size_t payloadLength = buildStatusPayload(
     payload,
     sizeof(payload),
@@ -1855,7 +2232,7 @@ bool connectMqtt() {
   lastMqttRetryMs = now;
   setDeviceMode(DEVICE_MODE_MQTT_CONNECTING);
 
-  char offlinePayload[1024];
+  char offlinePayload[1280];
   const size_t offlinePayloadLength = buildStatusPayload(
     offlinePayload,
     sizeof(offlinePayload),
@@ -1955,6 +2332,16 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     return;
   }
 
+  if (strcmp(type, "SET_DIRECTION_NORMAL") == 0) {
+    handleSetDirectionCommand(false, "mqtt");
+    return;
+  }
+
+  if (strcmp(type, "SET_DIRECTION_REVERSED") == 0) {
+    handleSetDirectionCommand(true, "mqtt");
+    return;
+  }
+
   if (strcmp(type, "LOCK_MOVEMENT") == 0) {
     handleLockMovementCommand("mqtt");
     return;
@@ -1998,8 +2385,8 @@ void setup() {
   Serial.println("Smart Shutter MVP booting...");
   setDeviceMode(DEVICE_MODE_BOOTING);
 
-  // Position is estimated in software only. If the motor skips steps or the
-  // shutter is moved by hand, the estimated percentage can drift.
+  // Absolute position is still estimated in software only. Calibration keeps
+  // the saved travel range, but manual movement can still desync live percent.
   resolvedDeviceId = resolveDeviceId();
   resolvedMqttClientId = resolveMqttClientId();
   resolvedCommandTopic = resolveTopic(COMMAND_TOPIC, "commands");
@@ -2018,7 +2405,8 @@ void setup() {
   Serial.println("MQTT topics resolved.");
 
   applyMotionProfile();
-  stepper.setCurrentPosition(percentToSteps(0));
+  stepper.setCurrentPosition(lastPersistedPositionSteps);
+  stepper.moveTo(lastPersistedPositionSteps);
   updateTargetPercentFromStepper();
   syncMovementLockedReason();
 
@@ -2071,6 +2459,15 @@ void loop() {
     Serial.println(movingNow ? "moving" : "idle");
 
     lastMovingState = movingNow;
+    if (!movingNow) {
+      setPositionEstimateState(
+        positionVerified
+          ? POSITION_ESTIMATE_TRACKED
+          : POSITION_ESTIMATE_NEEDS_VERIFICATION
+      );
+      capturePositionSnapshot(false);
+      savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
+    }
     setDeviceMode(movingNow ? DEVICE_MODE_MOVING : getIdleModeFromConnectivity());
     updateTargetPercentFromStepper();
     publishStatus(true);

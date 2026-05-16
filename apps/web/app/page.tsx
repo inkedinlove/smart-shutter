@@ -12,6 +12,7 @@ import {
 } from "@/lib/client-fetch";
 import {
   createDefaultDeviceStatus,
+  formatPositionEstimateState,
   type DeviceCommand,
   type DeviceCommandInput,
   type DeviceMode,
@@ -103,6 +104,22 @@ function getDeviceModeClasses(mode: DeviceMode, hasSeenStatus: boolean): string 
 
 function isTimeoutError(error: unknown): error is Error {
   return error instanceof Error && error.message.toLowerCase().includes("timed out");
+}
+
+function positionNeedsVerification(status: DeviceStatus): boolean {
+  return status.positionEstimateState === "needs_verification";
+}
+
+function getPositionEstimateNote(status: DeviceStatus): string {
+  if (status.positionEstimateReason) {
+    return status.positionEstimateReason;
+  }
+
+  if (status.positionEstimateState === "restored") {
+    return "Restored from the last saved stable device position.";
+  }
+
+  return "Updated from live device status";
 }
 
 export default function Home() {
@@ -301,13 +318,19 @@ export default function Home() {
     (status.setupMode === true ||
       status.safetyMode === true ||
       status.fullTravelReady === false ||
-      status.calibrationComplete === false);
+      status.calibrationComplete === false ||
+      positionNeedsVerification(status));
   const setupCardTitle = status.setupMode
     ? "Finish Wi-Fi setup"
-    : "Finish device setup";
+    : positionNeedsVerification(status)
+      ? "Verify current position"
+      : "Finish device setup";
   const setupCardMessage = status.setupMode
     ? "This shutter is in setup mode. Open guided setup to connect Wi-Fi and finish calibration."
-    : "This shutter still needs guided setup before regular control. Use setup to confirm direction and save the true closed and open positions.";
+    : positionNeedsVerification(status)
+      ? status.positionEstimateReason ??
+        "This shutter needs a quick position check before regular percentage moves are used again."
+      : "This shutter still needs guided setup before regular control. Use setup to confirm direction and save the true closed and open positions.";
 
   return (
     <AppShell
@@ -379,6 +402,9 @@ export default function Home() {
             <div className="mt-2 text-sm text-slate-400">
               Target {formatPercent(status.targetPercent)}
             </div>
+            <div className="mt-2 text-sm text-slate-500">
+              {formatPositionEstimateState(status.positionEstimateState)}
+            </div>
           </div>
 
           <div className="rounded-[1rem] border border-white/10 bg-white/5 p-5">
@@ -422,6 +448,10 @@ export default function Home() {
               className="h-full rounded-full bg-gradient-to-r from-cyan-300 via-sky-400 to-cyan-500 transition-[width] duration-500"
               style={{ width: `${progressValue}%` }}
             />
+          </div>
+
+          <div className="mt-4 text-sm text-slate-400">
+            {getPositionEstimateNote(status)}
           </div>
         </div>
 

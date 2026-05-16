@@ -10,7 +10,10 @@ import {
   redirectToLogin,
   SessionRequiredError,
 } from "@/lib/client-fetch";
-import type { DeviceStatus } from "@/lib/device";
+import {
+  formatPositionEstimateState,
+  type DeviceStatus,
+} from "@/lib/device";
 import type { RegisteredDevice } from "@/lib/devices";
 import { useDeviceRegistry } from "@/lib/use-device-registry";
 
@@ -481,6 +484,11 @@ export default function DevicesPage() {
                         {typeof liveStatus?.estimatedPercent === "number"
                           ? `${Math.round(liveStatus.estimatedPercent)}%`
                           : "Waiting for status"}
+                      </div>
+                      <div className="mt-1 text-sm text-slate-400">
+                        {formatPositionEstimateState(
+                          liveStatus?.positionEstimateState,
+                        )}
                       </div>
                     </div>
                   </div>

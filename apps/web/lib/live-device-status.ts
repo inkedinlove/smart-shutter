@@ -14,6 +14,7 @@ import {
   isDeviceActuatorType,
   isDeviceMode,
   isOtaState,
+  isPositionEstimateState,
   normalizeReportedBoardValue,
   type DeviceMode,
   type DeviceStatus,
@@ -188,6 +189,10 @@ export function parseStatusMessage(
       calibrationComplete: parseOptionalBoolean(parsed.calibrationComplete),
       fullTravelReady: parseOptionalBoolean(parsed.fullTravelReady),
       directionInverted: parseOptionalBoolean(parsed.directionInverted),
+      positionEstimateState: isPositionEstimateState(parsed.positionEstimateState)
+        ? parsed.positionEstimateState
+        : undefined,
+      positionEstimateReason: parseOptionalString(parsed.positionEstimateReason),
       safetyMode: parseOptionalBoolean(parsed.safetyMode),
       allowedMaxPercentStep: parseOptionalNumber(parsed.allowedMaxPercentStep),
       lastCalibrationAction: parseOptionalString(parsed.lastCalibrationAction),
