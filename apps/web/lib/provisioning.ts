@@ -393,13 +393,13 @@ constexpr const char* STATUS_TOPIC = ${toCString(input.statusTopic)};
 #define ENABLE_WIFI_POWER_SAVE true
 #define KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE false
 #define ENABLE_SOS_MODE true
-#define SOS_SHORT_PULSE_PERCENT 2
-#define SOS_LONG_PULSE_PERCENT 5
+#define SOS_SHORT_PULSE_PERCENT 25
+#define SOS_LONG_PULSE_PERCENT 50
 #define SOS_PULSE_GAP_MS 180UL
 #define SOS_LETTER_GAP_MS 420UL
 #define SOS_WORD_GAP_MS 900UL
-#define SOS_MOTOR_MAX_SPEED 900.0f
-#define SOS_MOTOR_ACCELERATION 500.0f
+#define SOS_MOTOR_MAX_SPEED 1400.0f
+#define SOS_MOTOR_ACCELERATION 800.0f
 
 // ---------------------------------------------------------------------------
 // Motor Wiring and Motion Tuning

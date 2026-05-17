@@ -117,11 +117,11 @@
 #endif
 
 #ifndef SOS_SHORT_PULSE_PERCENT
-#define SOS_SHORT_PULSE_PERCENT 2
+#define SOS_SHORT_PULSE_PERCENT 25
 #endif
 
 #ifndef SOS_LONG_PULSE_PERCENT
-#define SOS_LONG_PULSE_PERCENT 5
+#define SOS_LONG_PULSE_PERCENT 50
 #endif
 
 #ifndef SOS_PULSE_GAP_MS
@@ -137,11 +137,11 @@
 #endif
 
 #ifndef SOS_MOTOR_MAX_SPEED
-#define SOS_MOTOR_MAX_SPEED 900.0f
+#define SOS_MOTOR_MAX_SPEED 1400.0f
 #endif
 
 #ifndef SOS_MOTOR_ACCELERATION
-#define SOS_MOTOR_ACCELERATION 500.0f
+#define SOS_MOTOR_ACCELERATION 800.0f
 #endif
 
 // -----------------------------------------------------------------------------
@@ -203,6 +203,7 @@ struct OtaDownloadResult {
 
 enum SosPhase {
   SOS_PHASE_IDLE,
+  SOS_PHASE_CENTERING,
   SOS_PHASE_PULSE_OUT,
   SOS_PHASE_PULSE_BACK,
   SOS_PHASE_PAUSE,
@@ -501,6 +502,10 @@ long getSosPulseStepsForPercent(int percent) {
   return max(1L, scaleMagnitudeByPercent(getCalibrationTravelSpanMagnitude(), percent));
 }
 
+long getSosCenterAnchorPositionSteps() {
+  return percentToSteps(50);
+}
+
 long getSosDirectionSign(long anchorPositionSteps) {
   const long openDirectionSign = getOpenDirectionStepSign();
 
@@ -575,6 +580,29 @@ void beginSosPulseOut() {
   savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
 }
 
+void beginSosCentering() {
+  if (!isSosModeActive()) {
+    return;
+  }
+
+  if (labs(stepper.currentPosition() - sosAnchorPositionSteps) <= 1L) {
+    beginSosPulseOut();
+    return;
+  }
+
+  Serial.print("SOS auto-centering to anchor step ");
+  Serial.println(sosAnchorPositionSteps);
+
+  setStepperOutputsEnabled(true);
+  stepper.setMaxSpeed(SOS_MOTOR_MAX_SPEED);
+  stepper.setAcceleration(SOS_MOTOR_ACCELERATION);
+  stepper.moveTo(sosAnchorPositionSteps);
+  sosPhase = SOS_PHASE_CENTERING;
+  sosPauseUntilMs = 0;
+  capturePositionSnapshot(true);
+  savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
+}
+
 void beginSosReturnToAnchor() {
   if (!isSosModeActive()) {
     return;
@@ -595,6 +623,11 @@ void maintainSosMode() {
   }
 
   const unsigned long now = millis();
+
+  if (sosPhase == SOS_PHASE_CENTERING) {
+    beginSosPulseOut();
+    return;
+  }
 
   if (sosPhase == SOS_PHASE_PULSE_OUT) {
     beginSosReturnToAnchor();
@@ -1630,7 +1663,7 @@ void handleStartSosCommand(const char* source) {
   sosAnchorPositionSteps = stepper.currentPosition();
   sosPulseDirectionSign = getSosDirectionSign(sosAnchorPositionSteps);
 
-  const long availableRoomSteps =
+  long availableRoomSteps =
     getSosAvailableRoomSteps(sosAnchorPositionSteps, sosPulseDirectionSign);
   if (availableRoomSteps <= 0) {
     rejectMovementCommand(
@@ -1644,6 +1677,25 @@ void handleStartSosCommand(const char* source) {
     getSosPulseStepsForPercent(SOS_SHORT_PULSE_PERCENT);
   const long preferredLongPulseSteps =
     getSosPulseStepsForPercent(SOS_LONG_PULSE_PERCENT);
+
+  bool centerBeforeStarting = availableRoomSteps < preferredLongPulseSteps;
+
+  if (centerBeforeStarting) {
+    sosAnchorPositionSteps = getSosCenterAnchorPositionSteps();
+    sosPulseDirectionSign = getSosDirectionSign(sosAnchorPositionSteps);
+
+    const long centeredAvailableRoomSteps =
+      getSosAvailableRoomSteps(sosAnchorPositionSteps, sosPulseDirectionSign);
+    if (centeredAvailableRoomSteps <= 0) {
+      rejectMovementCommand(
+        "START_SOS",
+        "Not enough safe travel room is available for SOS mode."
+      );
+      return;
+    }
+
+    availableRoomSteps = centeredAvailableRoomSteps;
+  }
 
   sosLongPulseSteps = min(preferredLongPulseSteps, availableRoomSteps);
   sosShortPulseSteps = min(
@@ -1663,7 +1715,11 @@ void handleStartSosCommand(const char* source) {
   sosPhase = SOS_PHASE_IDLE;
   sosPauseUntilMs = 0;
   sosSequenceIndex = 0;
-  beginSosPulseOut();
+  if (centerBeforeStarting) {
+    beginSosCentering();
+  } else {
+    beginSosPulseOut();
+  }
   syncMovementLockedReason();
   setDeviceMode(isMoving() ? DEVICE_MODE_MOVING : getIdleModeFromConnectivity());
   publishStatus(true);
