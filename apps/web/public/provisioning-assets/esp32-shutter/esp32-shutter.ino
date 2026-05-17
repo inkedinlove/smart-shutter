@@ -1882,7 +1882,12 @@ bool fetchOtaManifest(OtaManifest* manifest) {
     return false;
   }
 
-  const String manifestDeviceId = String(manifestDoc["deviceId"] | "");
+  const JsonObjectConst manifestPayload =
+    manifestDoc["data"].is<JsonObject>()
+      ? manifestDoc["data"].as<JsonObjectConst>()
+      : manifestDoc.as<JsonObjectConst>();
+
+  const String manifestDeviceId = String(manifestPayload["deviceId"] | "");
   if (!deviceIdsMatch(resolvedDeviceId, manifestDeviceId)) {
     Serial.print("OTA manifest rejected: deviceId mismatch. expected=");
     Serial.print(resolvedDeviceId);
@@ -1891,16 +1896,16 @@ bool fetchOtaManifest(OtaManifest* manifest) {
     return false;
   }
 
-  manifest->updateAvailable = manifestDoc["updateAvailable"] | false;
-  manifest->currentVersion = String(manifestDoc["currentVersion"] | "");
-  manifest->latestVersion = String(manifestDoc["latestVersion"] | "");
-  manifest->board = String(manifestDoc["board"] | "");
-  manifest->channel = String(manifestDoc["channel"] | "");
-  manifest->autoUpdateEnabled = manifestDoc["autoUpdateEnabled"] | false;
+  manifest->updateAvailable = manifestPayload["updateAvailable"] | false;
+  manifest->currentVersion = String(manifestPayload["currentVersion"] | "");
+  manifest->latestVersion = String(manifestPayload["latestVersion"] | "");
+  manifest->board = String(manifestPayload["board"] | "");
+  manifest->channel = String(manifestPayload["channel"] | "");
+  manifest->autoUpdateEnabled = manifestPayload["autoUpdateEnabled"] | false;
   manifest->autoUpdateChannel =
-    String(manifestDoc["autoUpdateChannel"] | "stable");
-  manifest->artifactUrl = String(manifestDoc["artifactUrl"] | "");
-  manifest->sha256 = normalizeSha256(String(manifestDoc["sha256"] | ""));
+    String(manifestPayload["autoUpdateChannel"] | "stable");
+  manifest->artifactUrl = String(manifestPayload["artifactUrl"] | "");
+  manifest->sha256 = normalizeSha256(String(manifestPayload["sha256"] | ""));
 
   otaAutoUpdateEnabled = manifest->autoUpdateEnabled;
   otaAutoUpdateChannel =
@@ -1908,10 +1913,10 @@ bool fetchOtaManifest(OtaManifest* manifest) {
       ? manifest->autoUpdateChannel
       : "stable";
 
-  if (manifestDoc["sizeBytes"].is<long>()) {
-    manifest->sizeBytes = manifestDoc["sizeBytes"].as<long>();
-  } else if (manifestDoc["sizeBytes"].is<int>()) {
-    manifest->sizeBytes = manifestDoc["sizeBytes"].as<int>();
+  if (manifestPayload["sizeBytes"].is<long>()) {
+    manifest->sizeBytes = manifestPayload["sizeBytes"].as<long>();
+  } else if (manifestPayload["sizeBytes"].is<int>()) {
+    manifest->sizeBytes = manifestPayload["sizeBytes"].as<int>();
   } else {
     manifest->sizeBytes = -1;
   }

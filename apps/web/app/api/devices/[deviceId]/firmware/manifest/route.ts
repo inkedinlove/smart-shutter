@@ -1,6 +1,9 @@
 import { apiError, apiOk } from "@/lib/api-response";
 import { AccessControlError } from "@/lib/access-control";
-import { getAuthorizedFirmwareRouteDevice } from "@/lib/device-firmware-auth";
+import {
+  getAuthorizedFirmwareRouteDevice,
+  isDeviceFirmwareRequest,
+} from "@/lib/device-firmware-auth";
 import {
   createFirmwareManifestResponse,
   recordDeviceUpdateEvent,
@@ -59,6 +62,14 @@ export async function GET(request: Request, context: RouteContext) {
   }).catch((error) => {
     console.error("Unable to record firmware manifest event:", error);
   });
+
+  if (isDeviceFirmwareRequest(request.headers)) {
+    return Response.json(manifest, {
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    });
+  }
 
   return apiOk(manifest, {
     headers: {

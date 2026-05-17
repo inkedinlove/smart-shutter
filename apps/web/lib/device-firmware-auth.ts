@@ -18,7 +18,7 @@ function normalizeHeaderValue(
   return headers.get(headerName)?.trim() ?? "";
 }
 
-function hasAnyDeviceFirmwareHeaders(headers: Headers): boolean {
+export function isDeviceFirmwareRequest(headers: Headers): boolean {
   return (
     headers.has(DEVICE_ID_HEADER) ||
     headers.has(MQTT_USERNAME_HEADER) ||
@@ -99,7 +99,7 @@ export async function getAuthorizedFirmwareRouteDevice(
   request: Request,
   deviceId: string,
 ): Promise<AuthorizedFirmwareDeviceResult> {
-  if (hasAnyDeviceFirmwareHeaders(request.headers)) {
+  if (isDeviceFirmwareRequest(request.headers)) {
     return getAuthorizedDeviceFromSharedMqttCredentials(request, deviceId);
   }
 
