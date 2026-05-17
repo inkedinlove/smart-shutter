@@ -53,9 +53,9 @@ function parseDotEnvFile(filePath) {
 }
 
 const envCandidates = [
-  path.join(process.cwd(), "apps", "web", ".env.local"),
-  path.join(process.cwd(), "apps", "web", ".env"),
   path.join(process.cwd(), "apps", "web", ".env.example"),
+  path.join(process.cwd(), "apps", "web", ".env"),
+  path.join(process.cwd(), "apps", "web", ".env.local"),
 ];
 
 const fileEnv = envCandidates.reduce(

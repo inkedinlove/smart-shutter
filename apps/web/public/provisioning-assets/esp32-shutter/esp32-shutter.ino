@@ -22,7 +22,7 @@
 
 // Older local config.h files might not define newer OTA settings yet.
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.1.6-dev-esp32"
+#define FIRMWARE_VERSION "0.1.7-dev-esp32"
 #endif
 
 #ifndef ENABLE_OTA_UPDATES

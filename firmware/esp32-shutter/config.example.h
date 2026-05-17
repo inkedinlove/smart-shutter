@@ -19,8 +19,8 @@ constexpr const char* MQTT_CLIENT_ID = "";
 // settings in Preferences take precedence over these compile-time fallbacks.
 
 // Leave this blank to derive a unique fallback device ID from the ESP32 MAC.
-constexpr const char* DEVICE_ID = "shutter-dev-001";
-#define FIRMWARE_VERSION "0.1.6-dev-esp32"
+constexpr const char* DEVICE_ID = "";
+#define FIRMWARE_VERSION "0.1.7-dev-esp32"
 constexpr const char* COMMAND_TOPIC = "shutters/{deviceId}/commands";
 constexpr const char* STATUS_TOPIC = "shutters/{deviceId}/status";
 

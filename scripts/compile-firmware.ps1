@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $syncScriptPath = Join-Path $repoRoot "scripts\sync-firmware-versions.mjs"
+$generateSharedOtaConfigScriptPath = Join-Path $repoRoot "scripts\generate-shared-ota-config.mjs"
 $resolvedSketchDir = Join-Path $repoRoot $SketchDir
 $resolvedOutputDir = Join-Path $repoRoot $OutputDir
 $configPath = Join-Path $resolvedSketchDir "config.h"
@@ -40,8 +41,27 @@ function Get-RepoRelativePath {
   return $normalizedTargetPath
 }
 
+function Get-SharedOtaBoardName {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ResolvedSketchDir
+  )
+
+  $sketchDirName = (Split-Path -Path $ResolvedSketchDir -Leaf).Trim().ToLowerInvariant()
+
+  switch ($sketchDirName) {
+    "esp32-shutter" { return "esp32" }
+    "esp8266-d1d4-shutter" { return "esp8266-d1d4" }
+    default { return $null }
+  }
+}
+
 $relativeSketchDir = Get-RepoRelativePath -BasePath $repoRoot.Path -TargetPath $resolvedSketchDir
 $relativeConfigPath = Get-RepoRelativePath -BasePath $repoRoot.Path -TargetPath $configPath
+$sharedOtaBoardName = Get-SharedOtaBoardName -ResolvedSketchDir $resolvedSketchDir
+$shouldUseSharedOtaConfig = (-not $RequireProvisionedConfig) -and ($null -ne $sharedOtaBoardName)
+$resolvedCompileSketchDir = $resolvedSketchDir
+$relativeCompileSketchDir = $relativeSketchDir
 
 $arduinoCliPath = $null
 $arduinoCli = Get-Command arduino-cli -ErrorAction SilentlyContinue
@@ -62,7 +82,11 @@ if (-not (Test-Path $resolvedSketchDir)) {
   throw "Sketch directory not found: $resolvedSketchDir"
 }
 
-if (-not (Test-Path $configPath)) {
+if ($shouldUseSharedOtaConfig) {
+  if (-not (Test-Path $configExamplePath)) {
+    throw "Missing config.example.h in $resolvedSketchDir"
+  }
+} elseif (-not (Test-Path $configPath)) {
   if (-not (Test-Path $configExamplePath)) {
     throw "Missing config.h and config.example.h in $resolvedSketchDir"
   }
@@ -128,14 +152,51 @@ function Get-PlaceholderConfigFields {
   return $offendingFields | Sort-Object -Unique
 }
 
-$placeholderFields = @(Get-PlaceholderConfigFields -ConfigPath $configPath)
-if ($placeholderFields.Count -gt 0) {
-  $fields = $placeholderFields -join ", "
-  if ($RequireProvisionedConfig) {
-    throw "config.h still contains placeholder/example values for: $fields`nUpdate $relativeConfigPath with the real per-device settings before compiling."
+$placeholderFields = @()
+if (Test-Path $configPath) {
+  $placeholderFields = @(Get-PlaceholderConfigFields -ConfigPath $configPath)
+  if ($placeholderFields.Count -gt 0) {
+    $fields = $placeholderFields -join ", "
+    if ($RequireProvisionedConfig) {
+      throw "config.h still contains placeholder/example values for: $fields`nUpdate $relativeConfigPath with the real per-device settings before compiling."
+    }
+
+    Write-Host "config.h contains placeholder/generic values for: $fields" -ForegroundColor Yellow
+  }
+}
+
+if ($shouldUseSharedOtaConfig) {
+  if (-not (Test-Path $generateSharedOtaConfigScriptPath)) {
+    throw "Shared OTA config generator not found: $generateSharedOtaConfigScriptPath"
   }
 
-  Write-Host "config.h contains placeholder/generic values for: $fields" -ForegroundColor Yellow
+  $temporarySketchRoot = Join-Path $repoRoot ".arduino-build\tmp"
+  $temporaryBuildSessionDir = Join-Path $temporarySketchRoot ([Guid]::NewGuid().ToString("N"))
+  $temporarySketchDir = Join-Path $temporaryBuildSessionDir (Split-Path -Path $resolvedSketchDir -Leaf)
+  New-Item -ItemType Directory -Force -Path $temporarySketchDir | Out-Null
+  Copy-Item -Path (Join-Path $resolvedSketchDir "*") -Destination $temporarySketchDir -Recurse -Force
+
+  $generatedConfig = & node $generateSharedOtaConfigScriptPath $sharedOtaBoardName
+  if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+  }
+
+  $generatedConfigPath = Join-Path $temporarySketchDir "config.h"
+  $utf8NoBomEncoding = New-Object System.Text.UTF8Encoding($false)
+  $generatedConfigText = (($generatedConfig | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+  [System.IO.File]::WriteAllText(
+    $generatedConfigPath,
+    $generatedConfigText + [Environment]::NewLine,
+    $utf8NoBomEncoding
+  )
+
+  $resolvedCompileSketchDir = $temporarySketchDir
+  $relativeCompileSketchDir =
+    Get-RepoRelativePath -BasePath $repoRoot.Path -TargetPath $resolvedCompileSketchDir
+
+  Write-Host "Using generated shared-cloud OTA config for board '$sharedOtaBoardName'." -ForegroundColor Yellow
+  Write-Host "WiFi remains blank and device identity stays generic so saved per-device settings can win at runtime." -ForegroundColor Yellow
+} elseif ($placeholderFields.Count -gt 0) {
   Write-Host "Continuing because generic OTA/factory builds are allowed; use -RequireProvisionedConfig for a strict recovery/manual-flash build." -ForegroundColor Yellow
 }
 
@@ -145,13 +206,13 @@ $compileArgs = @(
   "compile"
   "--fqbn", $Fqbn
   "--output-dir", $resolvedOutputDir
-  $resolvedSketchDir
+  $resolvedCompileSketchDir
 )
 
 Write-Host "Compiling Smart Shutter firmware..." -ForegroundColor Cyan
 Write-Host "Arduino CLI: $arduinoCliPath"
 Write-Host "FQBN: $Fqbn"
-Write-Host "Sketch: $relativeSketchDir"
+Write-Host "Sketch: $relativeCompileSketchDir"
 Write-Host "Output: $resolvedOutputDir"
 
 & $arduinoCliPath @compileArgs
