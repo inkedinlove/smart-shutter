@@ -1,5 +1,10 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
+import path from "node:path";
+
 import { Prisma } from "@prisma/client";
 import type {
   DeviceUpdateEvent,
@@ -26,6 +31,8 @@ import {
 const DEFAULT_FIRMWARE_BOARD = "esp32";
 const MAX_FIRMWARE_SIZE_BYTES = 16 * 1024 * 1024;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
+const PLACEHOLDER_SHA256 =
+  "0000000000000000000000000000000000000000000000000000000000000000";
 
 const DEFAULT_FIRMWARE_CHANNEL = getDefaultFirmwareChannel();
 const FALLBACK_RELEASES: FirmwareReleaseRecord[] = Object.entries(
@@ -35,8 +42,7 @@ const FALLBACK_RELEASES: FirmwareReleaseRecord[] = Object.entries(
   channel: DEFAULT_FIRMWARE_CHANNEL,
   board,
   artifactUrl: `/firmware/releases/${version}/smart-shutter-${version}.bin`,
-  sha256:
-    "0000000000000000000000000000000000000000000000000000000000000000",
+  sha256: PLACEHOLDER_SHA256,
   sizeBytes: null,
   notes: `Placeholder ${board.toUpperCase()} firmware release entry for MVP planning and UI flow.`,
   isActive: true,
@@ -108,6 +114,88 @@ function isSafeArtifactUrl(rawUrl: string): boolean {
     return parsedUrl.origin === new URL(baseUrl).origin;
   } catch {
     return rawUrl.startsWith("/");
+  }
+}
+
+function getPublicDirectoryCandidates(): string[] {
+  return [
+    path.resolve(process.cwd(), "public"),
+    path.resolve(process.cwd(), "apps", "web", "public"),
+  ];
+}
+
+function resolveArtifactFilePath(artifactUrl: string): string | null {
+  const normalizedArtifactUrl = artifactUrl.trim();
+
+  if (normalizedArtifactUrl.length === 0) {
+    return null;
+  }
+
+  let pathname = normalizedArtifactUrl;
+
+  try {
+    pathname = new URL(normalizedArtifactUrl).pathname;
+  } catch {
+    pathname = normalizedArtifactUrl;
+  }
+
+  if (!pathname.startsWith("/")) {
+    return null;
+  }
+
+  const artifactRelativePath = pathname.replace(/^\/+/, "");
+  if (artifactRelativePath.length === 0) {
+    return null;
+  }
+
+  for (const publicDirectory of getPublicDirectoryCandidates()) {
+    if (!existsSync(publicDirectory)) {
+      continue;
+    }
+
+    const candidatePath = path.resolve(publicDirectory, artifactRelativePath);
+    const relativePath = path.relative(publicDirectory, candidatePath);
+
+    if (
+      relativePath.startsWith("..") ||
+      path.isAbsolute(relativePath) ||
+      !existsSync(candidatePath)
+    ) {
+      continue;
+    }
+
+    return candidatePath;
+  }
+
+  return null;
+}
+
+async function hydrateFirmwareReleaseMetadata(
+  release: FirmwareReleaseRecord,
+): Promise<FirmwareReleaseRecord> {
+  if (!isSafeArtifactUrl(release.artifactUrl)) {
+    return release;
+  }
+
+  const artifactFilePath = resolveArtifactFilePath(release.artifactUrl);
+  if (!artifactFilePath) {
+    return release;
+  }
+
+  try {
+    const [artifactContents, artifactStats] = await Promise.all([
+      readFile(artifactFilePath),
+      stat(artifactFilePath),
+    ]);
+
+    return {
+      ...release,
+      sha256: createHash("sha256").update(artifactContents).digest("hex"),
+      sizeBytes: artifactStats.size,
+    };
+  } catch (error) {
+    console.error("Unable to hydrate firmware release metadata:", error);
+    return release;
   }
 }
 
@@ -279,14 +367,18 @@ export async function listFirmwareReleases(options?: {
       });
 
       if (releases.length > 0) {
-        return releases.map(mapReleaseRecord);
+        return Promise.all(
+          releases.map((release) =>
+            hydrateFirmwareReleaseMetadata(mapReleaseRecord(release)),
+          ),
+        );
       }
     } catch (error) {
       console.error("Firmware release lookup failed, using fallback data:", error);
     }
   }
 
-  return FALLBACK_RELEASES;
+  return Promise.all(FALLBACK_RELEASES.map(hydrateFirmwareReleaseMetadata));
 }
 
 export async function listActiveFirmwareReleases(): Promise<FirmwareReleaseRecord[]> {

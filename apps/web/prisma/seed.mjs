@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 
 import { PrismaClient } from "@prisma/client";
 
@@ -15,6 +16,33 @@ const defaultEsp32Version =
   firmwareVersions?.boards?.esp32 ?? "0.1.1-dev-esp32";
 const defaultEsp32ArtifactPath =
   `/firmware/releases/${defaultEsp32Version}/smart-shutter-${defaultEsp32Version}.bin`;
+const placeholderSha256 =
+  "0000000000000000000000000000000000000000000000000000000000000000";
+
+function getDefaultEsp32ReleaseMetadata() {
+  const artifactFileUrl = new URL(
+    `../public${defaultEsp32ArtifactPath}`,
+    import.meta.url,
+  );
+
+  if (!fs.existsSync(artifactFileUrl)) {
+    return {
+      sha256: placeholderSha256,
+      sizeBytes: null,
+      notes: "Placeholder firmware release entry for MVP planning and UI flow.",
+    };
+  }
+
+  const artifactContents = fs.readFileSync(artifactFileUrl);
+
+  return {
+    sha256: createHash("sha256").update(artifactContents).digest("hex"),
+    sizeBytes: fs.statSync(artifactFileUrl).size,
+    notes: "Staged firmware release entry synchronized from the local OTA artifact.",
+  };
+}
+
+const defaultEsp32ReleaseMetadata = getDefaultEsp32ReleaseMetadata();
 
 async function main() {
   const demoProfile = isInternalTestMode
@@ -70,10 +98,9 @@ async function main() {
       channel: "stable",
       board: "esp32",
       artifactUrl: defaultEsp32ArtifactPath,
-      sha256:
-        "0000000000000000000000000000000000000000000000000000000000000000",
-      sizeBytes: null,
-      notes: "Placeholder firmware release entry for MVP planning and UI flow.",
+      sha256: defaultEsp32ReleaseMetadata.sha256,
+      sizeBytes: defaultEsp32ReleaseMetadata.sizeBytes,
+      notes: defaultEsp32ReleaseMetadata.notes,
       isActive: true,
     },
     create: {
@@ -81,10 +108,9 @@ async function main() {
       channel: "stable",
       board: "esp32",
       artifactUrl: defaultEsp32ArtifactPath,
-      sha256:
-        "0000000000000000000000000000000000000000000000000000000000000000",
-      sizeBytes: null,
-      notes: "Placeholder firmware release entry for MVP planning and UI flow.",
+      sha256: defaultEsp32ReleaseMetadata.sha256,
+      sizeBytes: defaultEsp32ReleaseMetadata.sizeBytes,
+      notes: defaultEsp32ReleaseMetadata.notes,
       isActive: true,
     },
   });
