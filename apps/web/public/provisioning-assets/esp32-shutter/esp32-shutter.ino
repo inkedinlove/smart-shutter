@@ -22,7 +22,7 @@
 
 // Older local config.h files might not define newer OTA settings yet.
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.1.5-dev-esp32"
+#define FIRMWARE_VERSION "0.1.6-dev-esp32"
 #endif
 
 #ifndef ENABLE_OTA_UPDATES
@@ -840,31 +840,52 @@ bool isPlaceholderBrokerValue(const String& value) {
   return value.startsWith("YOUR_");
 }
 
+bool isPlaceholderDeviceId(const String& value) {
+  if (!hasText(value)) {
+    return true;
+  }
+
+  return value.equalsIgnoreCase("shutter-dev-001");
+}
+
+bool isPlaceholderTopicValue(const String& value) {
+  if (!hasText(value)) {
+    return true;
+  }
+
+  return value.indexOf("shutter-dev-001") >= 0;
+}
+
 bool isPlaceholderApiBaseUrl(const String& value) {
   if (!hasText(value)) {
     return true;
   }
 
-  return value.indexOf("your-app.example.com") >= 0;
+  String normalizedValue = value;
+  normalizedValue.trim();
+  normalizedValue.toLowerCase();
+
+  return
+    normalizedValue.indexOf("your-app.example.com") >= 0 ||
+    normalizedValue.indexOf("localhost") >= 0 ||
+    normalizedValue.indexOf("127.0.0.1") >= 0 ||
+    normalizedValue.indexOf("0.0.0.0") >= 0;
 }
 
-bool hasUsableStoredCloudConnectionSettings() {
+bool hasUsableStoredMqttConnectionSettings() {
   return hasText(storedMqttHost) &&
          !isPlaceholderBrokerValue(storedMqttHost) &&
          storedMqttPort > 0 &&
          hasText(storedMqttUsername) &&
          !isPlaceholderBrokerValue(storedMqttUsername) &&
          hasText(storedMqttPassword) &&
-         !isPlaceholderBrokerValue(storedMqttPassword) &&
-         hasText(storedApiBaseUrl) &&
-         !isPlaceholderApiBaseUrl(storedApiBaseUrl);
+         !isPlaceholderBrokerValue(storedMqttPassword);
 }
 
-bool hasUsableConfiguredCloudConnectionSettings() {
+bool hasUsableConfiguredMqttConnectionSettings() {
   const String configuredMqttHost = String(MQTT_HOST);
   const String configuredMqttUsername = String(MQTT_USERNAME);
   const String configuredMqttPassword = String(MQTT_PASSWORD);
-  const String configuredApiBaseUrl = String(API_BASE_URL);
 
   return hasText(configuredMqttHost) &&
          !isPlaceholderBrokerValue(configuredMqttHost) &&
@@ -872,9 +893,18 @@ bool hasUsableConfiguredCloudConnectionSettings() {
          hasText(configuredMqttUsername) &&
          !isPlaceholderBrokerValue(configuredMqttUsername) &&
          hasText(configuredMqttPassword) &&
-         !isPlaceholderBrokerValue(configuredMqttPassword) &&
-         hasText(configuredApiBaseUrl) &&
-         !isPlaceholderApiBaseUrl(configuredApiBaseUrl);
+         !isPlaceholderBrokerValue(configuredMqttPassword);
+}
+
+bool hasUsableStoredApiBaseUrl() {
+  return hasText(storedApiBaseUrl) && !isPlaceholderApiBaseUrl(storedApiBaseUrl);
+}
+
+bool hasUsableConfiguredApiBaseUrl() {
+  const String configuredApiBaseUrl = String(API_BASE_URL);
+  return
+    hasText(configuredApiBaseUrl) &&
+    !isPlaceholderApiBaseUrl(configuredApiBaseUrl);
 }
 
 bool hasUsableRuntimeMqttConnectionSettings() {
@@ -884,9 +914,13 @@ bool hasUsableRuntimeMqttConnectionSettings() {
          hasText(runtimeMqttPassword);
 }
 
+bool hasUsableRuntimeApiBaseUrl() {
+  return hasText(runtimeApiBaseUrl) && !isPlaceholderApiBaseUrl(runtimeApiBaseUrl);
+}
+
 bool hasUsableRuntimeCloudConnectionSettings() {
-  return hasUsableRuntimeMqttConnectionSettings() &&
-         hasText(runtimeApiBaseUrl);
+  return
+    hasUsableRuntimeMqttConnectionSettings() || hasUsableRuntimeApiBaseUrl();
 }
 
 void logMissingCloudConfigIfNeeded() {
@@ -901,7 +935,7 @@ void logMissingCloudConfigIfNeeded() {
   lastCloudConfigErrorLogMs = now;
   Serial.println("MQTT connect skipped: broker settings are not configured.");
   Serial.println(
-    "Recovery flash must use real MQTT/API values, not placeholder config.h values."
+    "Saved broker settings are empty, and config.h fallback broker values still look invalid."
   );
 }
 
@@ -936,8 +970,11 @@ String getMacSuffixLower() {
 }
 
 String resolveDeviceId() {
-  if (hasText(DEVICE_ID)) {
-    return String(DEVICE_ID);
+  String configuredDeviceId = String(DEVICE_ID);
+  configuredDeviceId.trim();
+
+  if (!isPlaceholderDeviceId(configuredDeviceId)) {
+    return configuredDeviceId;
   }
 
   if (hasText(storedDeviceId)) {
@@ -967,7 +1004,10 @@ String resolveTopic(
   String topic = configuredTopic;
   topic.trim();
 
-  if (topic.length() == 0 && hasText(storedTopic)) {
+  if (
+    (topic.length() == 0 || isPlaceholderTopicValue(topic)) &&
+    hasText(storedTopic)
+  ) {
     topic = storedTopic;
   }
 
@@ -1250,33 +1290,38 @@ void resolveRuntimeWiFiCredentials() {
 }
 
 void resolveRuntimeCloudConnectionSettings() {
-  if (hasUsableStoredCloudConnectionSettings()) {
+  if (hasUsableStoredMqttConnectionSettings()) {
     runtimeMqttHost = storedMqttHost;
     runtimeMqttPort = storedMqttPort;
     runtimeMqttUsername = storedMqttUsername;
     runtimeMqttPassword = storedMqttPassword;
-    runtimeApiBaseUrl = storedApiBaseUrl;
-    Serial.println("Cloud config source: stored preferences");
-    return;
-  }
-
-  if (hasUsableConfiguredCloudConnectionSettings()) {
+    Serial.println("MQTT broker source: stored preferences");
+  } else if (hasUsableConfiguredMqttConnectionSettings()) {
     runtimeMqttHost = String(MQTT_HOST);
     runtimeMqttPort = static_cast<uint16_t>(MQTT_PORT);
     runtimeMqttUsername = String(MQTT_USERNAME);
     runtimeMqttPassword = String(MQTT_PASSWORD);
-    runtimeApiBaseUrl = String(API_BASE_URL);
-    Serial.println("Cloud config source: config.h bootstrap fallback");
-    return;
+    Serial.println("MQTT broker source: config.h bootstrap fallback");
+  } else {
+    runtimeMqttHost = "";
+    runtimeMqttPort = 0;
+    runtimeMqttUsername = "";
+    runtimeMqttPassword = "";
+    Serial.println("MQTT broker source: none");
+    Serial.println("MQTT broker settings are missing or still set to placeholder values.");
   }
 
-  runtimeMqttHost = "";
-  runtimeMqttPort = 0;
-  runtimeMqttUsername = "";
-  runtimeMqttPassword = "";
-  runtimeApiBaseUrl = "";
-  Serial.println("Cloud config source: none");
-  Serial.println("Cloud config is missing or still set to placeholder values.");
+  if (hasUsableStoredApiBaseUrl()) {
+    runtimeApiBaseUrl = storedApiBaseUrl;
+    Serial.println("OTA API source: stored preferences");
+  } else if (hasUsableConfiguredApiBaseUrl()) {
+    runtimeApiBaseUrl = String(API_BASE_URL);
+    Serial.println("OTA API source: config.h bootstrap fallback");
+  } else {
+    runtimeApiBaseUrl = "";
+    Serial.println("OTA API source: none");
+    Serial.println("OTA API base URL is missing or still set to placeholder values.");
+  }
 }
 
 bool savePersistedCloudConnectionSettings() {
@@ -1285,26 +1330,27 @@ bool savePersistedCloudConnectionSettings() {
   }
 
   preferences.begin("smart-shutter", false);
-  const size_t storedMqttHostLength =
-    preferences.putString("mqtt_host", runtimeMqttHost);
-  const bool storedMqttPortOk =
-    preferences.putUShort("mqtt_port", runtimeMqttPort) > 0;
-  const size_t storedMqttUsernameLength =
-    preferences.putString("mqtt_username", runtimeMqttUsername);
-  const size_t storedMqttPasswordLength =
-    preferences.putString("mqtt_password", runtimeMqttPassword);
-  const size_t storedApiBaseUrlLength =
-    preferences.putString("api_base_url", runtimeApiBaseUrl);
-  preferences.end();
+  bool storedMqttHostOk = true;
+  bool storedMqttPortOk = true;
+  bool storedMqttUsernameOk = true;
+  bool storedMqttPasswordOk = true;
+  bool storedApiBaseUrlOk = true;
 
-  const bool storedMqttHostOk =
-    runtimeMqttHost.length() == 0 || storedMqttHostLength > 0;
-  const bool storedMqttUsernameOk =
-    runtimeMqttUsername.length() == 0 || storedMqttUsernameLength > 0;
-  const bool storedMqttPasswordOk =
-    runtimeMqttPassword.length() == 0 || storedMqttPasswordLength > 0;
-  const bool storedApiBaseUrlOk =
-    runtimeApiBaseUrl.length() == 0 || storedApiBaseUrlLength > 0;
+  if (hasUsableRuntimeMqttConnectionSettings()) {
+    storedMqttHostOk = preferences.putString("mqtt_host", runtimeMqttHost) > 0;
+    storedMqttPortOk = preferences.putUShort("mqtt_port", runtimeMqttPort) > 0;
+    storedMqttUsernameOk =
+      preferences.putString("mqtt_username", runtimeMqttUsername) > 0;
+    storedMqttPasswordOk =
+      preferences.putString("mqtt_password", runtimeMqttPassword) > 0;
+  }
+
+  if (hasUsableRuntimeApiBaseUrl()) {
+    storedApiBaseUrlOk =
+      preferences.putString("api_base_url", runtimeApiBaseUrl) > 0;
+  }
+
+  preferences.end();
 
   if (
     storedMqttHostOk &&
@@ -1383,13 +1429,16 @@ void persistRuntimeCloudConnectionSettingsIfNeeded(const char* reason) {
     return;
   }
 
-  if (
-    storedMqttHost == runtimeMqttHost &&
-    storedMqttPort == runtimeMqttPort &&
-    storedMqttUsername == runtimeMqttUsername &&
-    storedMqttPassword == runtimeMqttPassword &&
-    storedApiBaseUrl == runtimeApiBaseUrl
-  ) {
+  const bool mqttNeedsPersistence =
+    hasUsableRuntimeMqttConnectionSettings() &&
+    (storedMqttHost != runtimeMqttHost ||
+     storedMqttPort != runtimeMqttPort ||
+     storedMqttUsername != runtimeMqttUsername ||
+     storedMqttPassword != runtimeMqttPassword);
+  const bool apiNeedsPersistence =
+    hasUsableRuntimeApiBaseUrl() && storedApiBaseUrl != runtimeApiBaseUrl;
+
+  if (!mqttNeedsPersistence && !apiNeedsPersistence) {
     return;
   }
 
@@ -1398,7 +1447,14 @@ void persistRuntimeCloudConnectionSettingsIfNeeded(const char* reason) {
     return;
   }
 
-  Serial.print("Persisted runtime cloud connection settings after ");
+  if (mqttNeedsPersistence && apiNeedsPersistence) {
+    Serial.print("Persisted runtime MQTT and OTA settings after ");
+  } else if (mqttNeedsPersistence) {
+    Serial.print("Persisted runtime MQTT settings after ");
+  } else {
+    Serial.print("Persisted runtime OTA API settings after ");
+  }
+
   Serial.println(reason);
 }
 

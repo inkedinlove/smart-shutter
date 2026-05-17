@@ -1,7 +1,8 @@
 param(
   [string]$Fqbn = "esp32:esp32:esp32",
   [string]$SketchDir = "firmware/esp32-shutter",
-  [string]$OutputDir = ".arduino-build/firmware/esp32-shutter"
+  [string]$OutputDir = ".arduino-build/firmware/esp32-shutter",
+  [switch]$RequireProvisionedConfig
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,7 +72,7 @@ if (-not (Test-Path $configPath)) {
   Write-Host "Update config.h with real WiFi and MQTT values before flashing hardware." -ForegroundColor Yellow
 }
 
-function Test-PlaceholderConfigValues {
+function Get-PlaceholderConfigFields {
   param(
     [Parameter(Mandatory = $true)]
     [string]$ConfigPath
@@ -124,13 +125,19 @@ function Test-PlaceholderConfigValues {
     }
   }
 
-  if ($offendingFields.Count -gt 0) {
-    $fields = ($offendingFields | Sort-Object -Unique) -join ", "
-    throw "config.h still contains placeholder/example values for: $fields`nUpdate $relativeConfigPath with the real per-device settings before compiling."
-  }
+  return $offendingFields | Sort-Object -Unique
 }
 
-Test-PlaceholderConfigValues -ConfigPath $configPath
+$placeholderFields = @(Get-PlaceholderConfigFields -ConfigPath $configPath)
+if ($placeholderFields.Count -gt 0) {
+  $fields = $placeholderFields -join ", "
+  if ($RequireProvisionedConfig) {
+    throw "config.h still contains placeholder/example values for: $fields`nUpdate $relativeConfigPath with the real per-device settings before compiling."
+  }
+
+  Write-Host "config.h contains placeholder/generic values for: $fields" -ForegroundColor Yellow
+  Write-Host "Continuing because generic OTA/factory builds are allowed; use -RequireProvisionedConfig for a strict recovery/manual-flash build." -ForegroundColor Yellow
+}
 
 New-Item -ItemType Directory -Force -Path $resolvedOutputDir | Out-Null
 
