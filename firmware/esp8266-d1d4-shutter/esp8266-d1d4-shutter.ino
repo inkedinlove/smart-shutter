@@ -263,6 +263,18 @@ bool hasText(const String& value) {
   return value.length() > 0;
 }
 
+bool deviceIdsMatch(const String& left, const String& right) {
+  String normalizedLeft = left;
+  String normalizedRight = right;
+  normalizedLeft.trim();
+  normalizedRight.trim();
+
+  return
+    normalizedLeft.length() > 0 &&
+    normalizedRight.length() > 0 &&
+    normalizedLeft.equalsIgnoreCase(normalizedRight);
+}
+
 void setDeviceMode(DeviceMode nextMode) {
   if (deviceMode == nextMode) {
     return;
@@ -1457,12 +1469,12 @@ bool fetchOtaManifest(OtaManifest* manifest) {
     return false;
   }
 
-  const char* manifestDeviceId = manifestDoc["deviceId"] | "";
-  if (
-    strlen(manifestDeviceId) == 0 ||
-    strcmp(manifestDeviceId, resolvedDeviceId.c_str()) != 0
-  ) {
-    Serial.println("OTA manifest rejected: deviceId mismatch.");
+  const String manifestDeviceId = String(manifestDoc["deviceId"] | "");
+  if (!deviceIdsMatch(resolvedDeviceId, manifestDeviceId)) {
+    Serial.print("OTA manifest rejected: deviceId mismatch. expected=");
+    Serial.print(resolvedDeviceId);
+    Serial.print(" received=");
+    Serial.println(manifestDeviceId);
     return false;
   }
 
