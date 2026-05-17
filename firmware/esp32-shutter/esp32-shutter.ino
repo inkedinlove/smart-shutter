@@ -22,7 +22,7 @@
 
 // Older local config.h files might not define newer OTA settings yet.
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.1.2-dev-esp32"
+#define FIRMWARE_VERSION "0.1.3-dev-esp32"
 #endif
 
 #ifndef ENABLE_OTA_UPDATES
@@ -297,6 +297,8 @@ String otaLastError = "";
 String otaTargetVersion = "";
 bool otaAutoUpdateEnabled = false;
 String otaAutoUpdateChannel = "stable";
+String storedWifiSsid = "";
+String storedWifiPassword = "";
 String resolvedDeviceId = "";
 String resolvedMqttClientId = "";
 String resolvedCommandTopic = "";
@@ -544,6 +546,7 @@ bool isMoving() {
 
 void applyMotionProfile();
 bool savePersistedDeviceSettings(const String& ssid, const String& password);
+void persistRuntimeWiFiCredentialsIfNeeded(const char* reason);
 
 unsigned long getStatusPublishIntervalMs(bool movingNow) {
   return movingNow ? MOVING_STATUS_INTERVAL_MS : IDLE_STATUS_INTERVAL_MS;
@@ -993,6 +996,8 @@ bool savePersistedDeviceSettings(const String& ssid, const String& password) {
   storedMqttClientId = mqttClientIdToStore;
   storedCommandTopic = commandTopicToStore;
   storedStatusTopic = statusTopicToStore;
+  storedWifiSsid = ssid;
+  storedWifiPassword = password;
 
   return storedSsid &&
          storedPassword &&
@@ -1023,6 +1028,8 @@ void loadStoredDeviceSettings(String* ssid, String* password) {
   positionRecoveredFromInterruptedMotion = false;
   lastPersistedPositionSteps = 0;
   lastPersistedTargetSteps = 0;
+  storedWifiSsid = "";
+  storedWifiPassword = "";
   storedDeviceId = "";
   storedMqttClientId = "";
   storedCommandTopic = "";
@@ -1030,6 +1037,8 @@ void loadStoredDeviceSettings(String* ssid, String* password) {
   preferences.begin("smart-shutter", true);
   *ssid = preferences.getString("wifi_ssid", "");
   *password = preferences.getString("wifi_password", "");
+  storedWifiSsid = *ssid;
+  storedWifiPassword = *password;
   storedDeviceId = preferences.getString("device_id", "");
   storedMqttClientId = preferences.getString("mqtt_client_id", "");
   storedCommandTopic = preferences.getString("cmd_topic", "");
@@ -1122,18 +1131,25 @@ bool saveCalibrationSettings() {
 }
 
 void resolveRuntimeWiFiCredentials() {
-  String storedSsid = "";
-  String storedPassword = "";
-  loadStoredDeviceSettings(&storedSsid, &storedPassword);
+  loadStoredDeviceSettings(&storedWifiSsid, &storedWifiPassword);
+
+  if (hasText(storedWifiSsid)) {
+    runtimeWifiSsid = storedWifiSsid;
+    runtimeWifiPassword = storedWifiPassword;
+    Serial.println("WiFi credential source: stored preferences");
+    return;
+  }
 
   if (hasText(WIFI_SSID)) {
     runtimeWifiSsid = WIFI_SSID;
     runtimeWifiPassword = WIFI_PASSWORD;
+    Serial.println("WiFi credential source: config.h bootstrap fallback");
     return;
   }
 
-  runtimeWifiSsid = storedSsid;
-  runtimeWifiPassword = storedPassword;
+  runtimeWifiSsid = "";
+  runtimeWifiPassword = "";
+  Serial.println("WiFi credential source: none");
 }
 
 bool hasRuntimeWiFiCredentials() {
@@ -1165,6 +1181,30 @@ String bytesToHexString(const unsigned char* bytes, size_t length) {
 void publishStatus(bool forceLog = false);
 void startLocalFallbackServerIfNeeded();
 bool checkForUpdate(bool autoCheck);
+
+void persistRuntimeWiFiCredentialsIfNeeded(const char* reason) {
+  if (!hasRuntimeWiFiCredentials()) {
+    return;
+  }
+
+  if (
+    storedWifiSsid == runtimeWifiSsid &&
+    storedWifiPassword == runtimeWifiPassword
+  ) {
+    return;
+  }
+
+  capturePositionSnapshot(isMoving());
+  if (!savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword)) {
+    Serial.println("Failed to persist runtime WiFi credentials.");
+    return;
+  }
+
+  Serial.print("Persisted runtime WiFi credentials after ");
+  Serial.print(reason);
+  Serial.print(" for SSID: ");
+  Serial.println(runtimeWifiSsid);
+}
 
 void setOtaState(
   OtaState nextState,
@@ -2910,6 +2950,7 @@ bool maintainWiFiConnection() {
       wifiConnectInProgress = false;
       Serial.print("WiFi connected. IP address: ");
       Serial.println(WiFi.localIP());
+      persistRuntimeWiFiCredentialsIfNeeded("successful WiFi connection");
       stopFactorySetupPortalIfNeeded();
       setDeviceMode(DEVICE_MODE_MQTT_CONNECTING);
     }

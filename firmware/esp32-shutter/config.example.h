@@ -5,6 +5,8 @@
 // ---------------------------------------------------------------------------
 
 // Leave WiFi blank to use factory setup mode with a local setup AP and portal.
+// Once a device saves WiFi in Preferences, that per-device network takes
+// precedence over these compile-time fallback values on future boots and OTAs.
 constexpr const char* WIFI_SSID = "";
 constexpr const char* WIFI_PASSWORD = "";
 
@@ -16,7 +18,7 @@ constexpr const char* MQTT_CLIENT_ID = "";
 
 // Leave this blank to derive a unique fallback device ID from the ESP32 MAC.
 constexpr const char* DEVICE_ID = "shutter-dev-001";
-#define FIRMWARE_VERSION "0.1.2-dev-esp32"
+#define FIRMWARE_VERSION "0.1.3-dev-esp32"
 constexpr const char* COMMAND_TOPIC = "shutters/{deviceId}/commands";
 constexpr const char* STATUS_TOPIC = "shutters/{deviceId}/status";
 

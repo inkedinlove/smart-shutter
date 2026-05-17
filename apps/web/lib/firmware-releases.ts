@@ -170,6 +170,45 @@ function resolveArtifactFilePath(artifactUrl: string): string | null {
   return null;
 }
 
+function getFirmwareReleaseKey(
+  release: Pick<FirmwareReleaseRecord, "board" | "channel" | "version">,
+): string {
+  return `${release.board}::${release.channel}::${release.version}`;
+}
+
+function mergeFirmwareReleaseRecords(
+  preferredReleases: FirmwareReleaseRecord[],
+  fallbackReleases: FirmwareReleaseRecord[],
+): FirmwareReleaseRecord[] {
+  const mergedReleases = new Map<string, FirmwareReleaseRecord>();
+
+  for (const release of fallbackReleases) {
+    mergedReleases.set(getFirmwareReleaseKey(release), release);
+  }
+
+  for (const release of preferredReleases) {
+    const releaseKey = getFirmwareReleaseKey(release);
+    const fallbackRelease = mergedReleases.get(releaseKey);
+    mergedReleases.set(
+      releaseKey,
+      fallbackRelease
+        ? {
+            ...fallbackRelease,
+            ...release,
+          }
+        : release,
+    );
+  }
+
+  return Array.from(mergedReleases.values()).sort((left, right) => {
+    if (left.isActive !== right.isActive) {
+      return left.isActive ? -1 : 1;
+    }
+
+    return Date.parse(right.createdAt) - Date.parse(left.createdAt);
+  });
+}
+
 async function hydrateFirmwareReleaseMetadata(
   release: FirmwareReleaseRecord,
 ): Promise<FirmwareReleaseRecord> {
@@ -351,6 +390,9 @@ export async function listFirmwareReleases(options?: {
   includeInactive?: boolean;
 }): Promise<FirmwareReleaseRecord[]> {
   const db = getDb();
+  const hydratedFallbackReleases = await Promise.all(
+    FALLBACK_RELEASES.map(hydrateFirmwareReleaseMetadata),
+  );
 
   if (isDatabaseConfigured() && db) {
     try {
@@ -367,10 +409,15 @@ export async function listFirmwareReleases(options?: {
       });
 
       if (releases.length > 0) {
-        return Promise.all(
+        const hydratedDatabaseReleases = await Promise.all(
           releases.map((release) =>
             hydrateFirmwareReleaseMetadata(mapReleaseRecord(release)),
           ),
+        );
+
+        return mergeFirmwareReleaseRecords(
+          hydratedDatabaseReleases,
+          hydratedFallbackReleases,
         );
       }
     } catch (error) {
@@ -378,7 +425,7 @@ export async function listFirmwareReleases(options?: {
     }
   }
 
-  return Promise.all(FALLBACK_RELEASES.map(hydrateFirmwareReleaseMetadata));
+  return hydratedFallbackReleases;
 }
 
 export async function listActiveFirmwareReleases(): Promise<FirmwareReleaseRecord[]> {
