@@ -5,6 +5,7 @@
 #include <PubSubClient.h>
 #include <Update.h>
 #include <WebServer.h>
+#include <esp_system.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <mbedtls/sha256.h>
@@ -361,6 +362,49 @@ const char* positionEstimateStateToString(PositionEstimateState state) {
     default:
       return "needs_verification";
   }
+}
+
+const char* resetReasonToString(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_UNKNOWN:
+      return "unknown";
+    case ESP_RST_POWERON:
+      return "power_on";
+    case ESP_RST_EXT:
+      return "external_reset";
+    case ESP_RST_SW:
+      return "software_reset";
+    case ESP_RST_PANIC:
+      return "panic";
+    case ESP_RST_INT_WDT:
+      return "interrupt_watchdog";
+    case ESP_RST_TASK_WDT:
+      return "task_watchdog";
+    case ESP_RST_WDT:
+      return "other_watchdog";
+    case ESP_RST_DEEPSLEEP:
+      return "deep_sleep_wake";
+    case ESP_RST_BROWNOUT:
+      return "brownout";
+    case ESP_RST_SDIO:
+      return "sdio_reset";
+    default:
+      return "unknown";
+  }
+}
+
+void logBootBanner() {
+  const esp_reset_reason_t resetReason = esp_reset_reason();
+
+  Serial.println();
+  Serial.println("Smart Shutter MVP booting...");
+  Serial.print("Firmware version: ");
+  Serial.println(FIRMWARE_VERSION);
+  Serial.print("Reset reason: ");
+  Serial.print(resetReasonToString(resetReason));
+  Serial.print(" (");
+  Serial.print(static_cast<int>(resetReason));
+  Serial.println(")");
 }
 
 bool isPositionEstimateUncertain() {
@@ -3054,7 +3098,7 @@ void setup() {
       ? static_cast<unsigned long>(ESP.getEfuseMac() % (OTA_AUTO_CHECK_JITTER_MS + 1UL))
       : 0;
 
-  Serial.println("Smart Shutter MVP booting...");
+  logBootBanner();
   setDeviceMode(DEVICE_MODE_BOOTING);
 
   // Absolute position is still estimated in software only. Calibration keeps
