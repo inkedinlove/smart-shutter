@@ -22,7 +22,7 @@
 
 // Older local config.h files might not define newer OTA settings yet.
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.1.3-dev-esp32"
+#define FIRMWARE_VERSION "0.1.4-dev-esp32"
 #endif
 
 #ifndef ENABLE_OTA_UPDATES
@@ -299,6 +299,16 @@ bool otaAutoUpdateEnabled = false;
 String otaAutoUpdateChannel = "stable";
 String storedWifiSsid = "";
 String storedWifiPassword = "";
+String storedMqttHost = "";
+uint16_t storedMqttPort = 0;
+String storedMqttUsername = "";
+String storedMqttPassword = "";
+String storedApiBaseUrl = "";
+String runtimeMqttHost = "";
+uint16_t runtimeMqttPort = 0;
+String runtimeMqttUsername = "";
+String runtimeMqttPassword = "";
+String runtimeApiBaseUrl = "";
 String resolvedDeviceId = "";
 String resolvedMqttClientId = "";
 String resolvedCommandTopic = "";
@@ -547,6 +557,8 @@ bool isMoving() {
 void applyMotionProfile();
 bool savePersistedDeviceSettings(const String& ssid, const String& password);
 void persistRuntimeWiFiCredentialsIfNeeded(const char* reason);
+bool savePersistedCloudConnectionSettings();
+void persistRuntimeCloudConnectionSettingsIfNeeded(const char* reason);
 
 unsigned long getStatusPublishIntervalMs(bool movingNow) {
   return movingNow ? MOVING_STATUS_INTERVAL_MS : IDLE_STATUS_INTERVAL_MS;
@@ -818,6 +830,63 @@ bool hasText(const String& value) {
   return value.length() > 0;
 }
 
+bool isPlaceholderBrokerValue(const String& value) {
+  if (!hasText(value)) {
+    return true;
+  }
+
+  return value.startsWith("YOUR_");
+}
+
+bool isPlaceholderApiBaseUrl(const String& value) {
+  if (!hasText(value)) {
+    return true;
+  }
+
+  return value.indexOf("your-app.example.com") >= 0;
+}
+
+bool hasUsableStoredCloudConnectionSettings() {
+  return hasText(storedMqttHost) &&
+         !isPlaceholderBrokerValue(storedMqttHost) &&
+         storedMqttPort > 0 &&
+         hasText(storedMqttUsername) &&
+         !isPlaceholderBrokerValue(storedMqttUsername) &&
+         hasText(storedMqttPassword) &&
+         !isPlaceholderBrokerValue(storedMqttPassword) &&
+         hasText(storedApiBaseUrl) &&
+         !isPlaceholderApiBaseUrl(storedApiBaseUrl);
+}
+
+bool hasUsableConfiguredCloudConnectionSettings() {
+  const String configuredMqttHost = String(MQTT_HOST);
+  const String configuredMqttUsername = String(MQTT_USERNAME);
+  const String configuredMqttPassword = String(MQTT_PASSWORD);
+  const String configuredApiBaseUrl = String(API_BASE_URL);
+
+  return hasText(configuredMqttHost) &&
+         !isPlaceholderBrokerValue(configuredMqttHost) &&
+         MQTT_PORT > 0 &&
+         hasText(configuredMqttUsername) &&
+         !isPlaceholderBrokerValue(configuredMqttUsername) &&
+         hasText(configuredMqttPassword) &&
+         !isPlaceholderBrokerValue(configuredMqttPassword) &&
+         hasText(configuredApiBaseUrl) &&
+         !isPlaceholderApiBaseUrl(configuredApiBaseUrl);
+}
+
+bool hasUsableRuntimeMqttConnectionSettings() {
+  return hasText(runtimeMqttHost) &&
+         runtimeMqttPort > 0 &&
+         hasText(runtimeMqttUsername) &&
+         hasText(runtimeMqttPassword);
+}
+
+bool hasUsableRuntimeCloudConnectionSettings() {
+  return hasUsableRuntimeMqttConnectionSettings() &&
+         hasText(runtimeApiBaseUrl);
+}
+
 bool deviceIdsMatch(const String& left, const String& right) {
   String normalizedLeft = left;
   String normalizedRight = right;
@@ -1030,6 +1099,11 @@ void loadStoredDeviceSettings(String* ssid, String* password) {
   lastPersistedTargetSteps = 0;
   storedWifiSsid = "";
   storedWifiPassword = "";
+  storedMqttHost = "";
+  storedMqttPort = 0;
+  storedMqttUsername = "";
+  storedMqttPassword = "";
+  storedApiBaseUrl = "";
   storedDeviceId = "";
   storedMqttClientId = "";
   storedCommandTopic = "";
@@ -1039,6 +1113,11 @@ void loadStoredDeviceSettings(String* ssid, String* password) {
   *password = preferences.getString("wifi_password", "");
   storedWifiSsid = *ssid;
   storedWifiPassword = *password;
+  storedMqttHost = preferences.getString("mqtt_host", "");
+  storedMqttPort = preferences.getUShort("mqtt_port", 0);
+  storedMqttUsername = preferences.getString("mqtt_username", "");
+  storedMqttPassword = preferences.getString("mqtt_password", "");
+  storedApiBaseUrl = preferences.getString("api_base_url", "");
   storedDeviceId = preferences.getString("device_id", "");
   storedMqttClientId = preferences.getString("mqtt_client_id", "");
   storedCommandTopic = preferences.getString("cmd_topic", "");
@@ -1152,6 +1231,80 @@ void resolveRuntimeWiFiCredentials() {
   Serial.println("WiFi credential source: none");
 }
 
+void resolveRuntimeCloudConnectionSettings() {
+  if (hasUsableStoredCloudConnectionSettings()) {
+    runtimeMqttHost = storedMqttHost;
+    runtimeMqttPort = storedMqttPort;
+    runtimeMqttUsername = storedMqttUsername;
+    runtimeMqttPassword = storedMqttPassword;
+    runtimeApiBaseUrl = storedApiBaseUrl;
+    Serial.println("Cloud config source: stored preferences");
+    return;
+  }
+
+  if (hasUsableConfiguredCloudConnectionSettings()) {
+    runtimeMqttHost = String(MQTT_HOST);
+    runtimeMqttPort = static_cast<uint16_t>(MQTT_PORT);
+    runtimeMqttUsername = String(MQTT_USERNAME);
+    runtimeMqttPassword = String(MQTT_PASSWORD);
+    runtimeApiBaseUrl = String(API_BASE_URL);
+    Serial.println("Cloud config source: config.h bootstrap fallback");
+    return;
+  }
+
+  runtimeMqttHost = "";
+  runtimeMqttPort = 0;
+  runtimeMqttUsername = "";
+  runtimeMqttPassword = "";
+  runtimeApiBaseUrl = "";
+  Serial.println("Cloud config source: none");
+}
+
+bool savePersistedCloudConnectionSettings() {
+  if (!hasUsableRuntimeCloudConnectionSettings()) {
+    return false;
+  }
+
+  preferences.begin("smart-shutter", false);
+  const size_t storedMqttHostLength =
+    preferences.putString("mqtt_host", runtimeMqttHost);
+  const bool storedMqttPortOk =
+    preferences.putUShort("mqtt_port", runtimeMqttPort) > 0;
+  const size_t storedMqttUsernameLength =
+    preferences.putString("mqtt_username", runtimeMqttUsername);
+  const size_t storedMqttPasswordLength =
+    preferences.putString("mqtt_password", runtimeMqttPassword);
+  const size_t storedApiBaseUrlLength =
+    preferences.putString("api_base_url", runtimeApiBaseUrl);
+  preferences.end();
+
+  const bool storedMqttHostOk =
+    runtimeMqttHost.length() == 0 || storedMqttHostLength > 0;
+  const bool storedMqttUsernameOk =
+    runtimeMqttUsername.length() == 0 || storedMqttUsernameLength > 0;
+  const bool storedMqttPasswordOk =
+    runtimeMqttPassword.length() == 0 || storedMqttPasswordLength > 0;
+  const bool storedApiBaseUrlOk =
+    runtimeApiBaseUrl.length() == 0 || storedApiBaseUrlLength > 0;
+
+  if (
+    storedMqttHostOk &&
+    storedMqttPortOk &&
+    storedMqttUsernameOk &&
+    storedMqttPasswordOk &&
+    storedApiBaseUrlOk
+  ) {
+    storedMqttHost = runtimeMqttHost;
+    storedMqttPort = runtimeMqttPort;
+    storedMqttUsername = runtimeMqttUsername;
+    storedMqttPassword = runtimeMqttPassword;
+    storedApiBaseUrl = runtimeApiBaseUrl;
+    return true;
+  }
+
+  return false;
+}
+
 bool hasRuntimeWiFiCredentials() {
   return hasText(runtimeWifiSsid);
 }
@@ -1206,6 +1359,30 @@ void persistRuntimeWiFiCredentialsIfNeeded(const char* reason) {
   Serial.println(runtimeWifiSsid);
 }
 
+void persistRuntimeCloudConnectionSettingsIfNeeded(const char* reason) {
+  if (!hasUsableRuntimeCloudConnectionSettings()) {
+    return;
+  }
+
+  if (
+    storedMqttHost == runtimeMqttHost &&
+    storedMqttPort == runtimeMqttPort &&
+    storedMqttUsername == runtimeMqttUsername &&
+    storedMqttPassword == runtimeMqttPassword &&
+    storedApiBaseUrl == runtimeApiBaseUrl
+  ) {
+    return;
+  }
+
+  if (!savePersistedCloudConnectionSettings()) {
+    Serial.println("Failed to persist runtime cloud connection settings.");
+    return;
+  }
+
+  Serial.print("Persisted runtime cloud connection settings after ");
+  Serial.println(reason);
+}
+
 void setOtaState(
   OtaState nextState,
   const String& nextTargetVersion,
@@ -1238,7 +1415,7 @@ void setOtaState(
 }
 
 String buildApiUrl(const char* pathTemplate) {
-  String baseUrl = API_BASE_URL;
+  String baseUrl = runtimeApiBaseUrl;
   baseUrl.trim();
 
   if (baseUrl.length() == 0) {
@@ -1274,7 +1451,7 @@ String resolveHttpUrl(String rawUrl) {
     return rawUrl;
   }
 
-  String baseUrl = API_BASE_URL;
+  String baseUrl = runtimeApiBaseUrl;
   baseUrl.trim();
 
   if (baseUrl.length() == 0) {
@@ -1317,8 +1494,8 @@ bool beginHttpClient(
 
 void addOtaAuthHeaders(HTTPClient& http) {
   http.addHeader("X-Smart-Shutter-Device-Id", resolvedDeviceId);
-  http.addHeader("X-Smart-Shutter-Mqtt-Username", MQTT_USERNAME);
-  http.addHeader("X-Smart-Shutter-Mqtt-Password", MQTT_PASSWORD);
+  http.addHeader("X-Smart-Shutter-Mqtt-Username", runtimeMqttUsername);
+  http.addHeader("X-Smart-Shutter-Mqtt-Password", runtimeMqttPassword);
 }
 
 size_t buildStatusPayload(
@@ -3003,6 +3180,12 @@ bool connectMqtt() {
     return false;
   }
 
+  if (!hasUsableRuntimeMqttConnectionSettings()) {
+    Serial.println("MQTT connect skipped: broker settings are not configured.");
+    setDeviceMode(DEVICE_MODE_ERROR);
+    return false;
+  }
+
   const unsigned long now = millis();
   if (now - lastMqttRetryMs < MQTT_RETRY_MS) {
     return false;
@@ -3022,14 +3205,14 @@ bool connectMqtt() {
   offlinePayload[min(offlinePayloadLength, sizeof(offlinePayload) - 1)] = '\0';
 
   Serial.print("Connecting to MQTT broker ");
-  Serial.print(MQTT_HOST);
+  Serial.print(runtimeMqttHost);
   Serial.print(":");
-  Serial.println(MQTT_PORT);
+  Serial.println(runtimeMqttPort);
 
   if (!mqttClient.connect(
         resolvedMqttClientId.c_str(),
-        MQTT_USERNAME,
-        MQTT_PASSWORD,
+        runtimeMqttUsername.c_str(),
+        runtimeMqttPassword.c_str(),
         resolvedStatusTopic.c_str(),
         1,
         true,
@@ -3041,6 +3224,7 @@ bool connectMqtt() {
   }
 
   Serial.println("MQTT connected.");
+  persistRuntimeCloudConnectionSettingsIfNeeded("successful MQTT connection");
   if (!mqttClient.subscribe(resolvedCommandTopic.c_str(), 1)) {
     Serial.println("Failed to subscribe to command topic.");
     mqttClient.disconnect();
@@ -3182,6 +3366,7 @@ void setup() {
   // Absolute position is still estimated in software only. Calibration keeps
   // the saved travel range, but manual movement can still desync live percent.
   resolveRuntimeWiFiCredentials();
+  resolveRuntimeCloudConnectionSettings();
   resolvedDeviceId = resolveDeviceId();
   resolvedMqttClientId = resolveMqttClientId();
   resolvedCommandTopic =
@@ -3222,7 +3407,7 @@ void setup() {
   // production or installed-device deployment.
   secureClient.setInsecure();
 
-  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  mqttClient.setServer(runtimeMqttHost.c_str(), runtimeMqttPort);
   mqttClient.setCallback(onMqttMessage);
   mqttClient.setBufferSize(2048);
   mqttClient.setKeepAlive(MQTT_KEEP_ALIVE_SECONDS);

@@ -15,10 +15,12 @@ constexpr int MQTT_PORT = 8883;
 constexpr const char* MQTT_USERNAME = "YOUR_HIVEMQ_USERNAME";
 constexpr const char* MQTT_PASSWORD = "YOUR_HIVEMQ_PASSWORD";
 constexpr const char* MQTT_CLIENT_ID = "";
+// Once a device successfully connects to the cloud, the saved broker and API
+// settings in Preferences take precedence over these compile-time fallbacks.
 
 // Leave this blank to derive a unique fallback device ID from the ESP32 MAC.
 constexpr const char* DEVICE_ID = "shutter-dev-001";
-#define FIRMWARE_VERSION "0.1.3-dev-esp32"
+#define FIRMWARE_VERSION "0.1.4-dev-esp32"
 constexpr const char* COMMAND_TOPIC = "shutters/{deviceId}/commands";
 constexpr const char* STATUS_TOPIC = "shutters/{deviceId}/status";
 
