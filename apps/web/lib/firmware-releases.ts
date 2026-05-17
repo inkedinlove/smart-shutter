@@ -111,6 +111,35 @@ function isSafeArtifactUrl(rawUrl: string): boolean {
   }
 }
 
+export function resolveFirmwareArtifactUrl(
+  artifactUrl: string | null,
+  baseUrl: string,
+): string | null {
+  if (!artifactUrl) {
+    return null;
+  }
+
+  const normalizedArtifactUrl = artifactUrl.trim();
+
+  if (normalizedArtifactUrl.length === 0) {
+    return null;
+  }
+
+  try {
+    return new URL(normalizedArtifactUrl).toString();
+  } catch {
+    try {
+      const rootRelativeArtifactUrl = normalizedArtifactUrl.startsWith("/")
+        ? normalizedArtifactUrl
+        : `/${normalizedArtifactUrl}`;
+
+      return new URL(rootRelativeArtifactUrl, baseUrl).toString();
+    } catch {
+      return null;
+    }
+  }
+}
+
 function normalizeOptionalText(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;

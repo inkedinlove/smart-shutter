@@ -710,6 +710,35 @@ String buildApiUrl(const char* pathTemplate) {
   return baseUrl + path;
 }
 
+String resolveHttpUrl(String rawUrl) {
+  rawUrl.trim();
+
+  if (rawUrl.length() == 0) {
+    return "";
+  }
+
+  if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+    return rawUrl;
+  }
+
+  String baseUrl = API_BASE_URL;
+  baseUrl.trim();
+
+  if (baseUrl.length() == 0) {
+    return "";
+  }
+
+  while (baseUrl.endsWith("/")) {
+    baseUrl.remove(baseUrl.length() - 1);
+  }
+
+  if (!rawUrl.startsWith("/")) {
+    rawUrl = "/" + rawUrl;
+  }
+
+  return baseUrl + rawUrl;
+}
+
 bool beginHttpClient(
   HTTPClient& http,
   const String& url,
@@ -1554,11 +1583,17 @@ bool downloadFirmware(
   BearSSL::WiFiClientSecure secureHttpClient;
   WiFiClient plainHttpClient;
   HTTPClient http;
+  const String artifactUrl = resolveHttpUrl(manifest.artifactUrl);
 
   Serial.print("OTA step: download firmware -> ");
-  Serial.println(manifest.artifactUrl);
+  Serial.println(artifactUrl.length() > 0 ? artifactUrl : manifest.artifactUrl);
 
-  if (!beginHttpClient(http, manifest.artifactUrl, secureHttpClient, plainHttpClient)) {
+  if (artifactUrl.length() == 0) {
+    Serial.println("OTA download failed: artifactUrl could not be resolved.");
+    return false;
+  }
+
+  if (!beginHttpClient(http, artifactUrl, secureHttpClient, plainHttpClient)) {
     Serial.println("OTA download failed: unable to start HTTP client.");
     return false;
   }

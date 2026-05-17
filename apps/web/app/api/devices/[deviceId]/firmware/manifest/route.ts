@@ -7,6 +7,7 @@ import {
 import {
   createFirmwareManifestResponse,
   recordDeviceUpdateEvent,
+  resolveFirmwareArtifactUrl,
 } from "@/lib/firmware-releases";
 import {
   persistReportedFirmwareVersion,
@@ -64,11 +65,18 @@ export async function GET(request: Request, context: RouteContext) {
   });
 
   if (isDeviceFirmwareRequest(request.headers)) {
-    return Response.json(manifest, {
-      headers: {
-        "Cache-Control": "no-store",
+    return Response.json(
+      {
+        ...manifest,
+        // Device OTA clients need an absolute binary URL they can fetch directly.
+        artifactUrl: resolveFirmwareArtifactUrl(manifest.artifactUrl, request.url),
       },
-    });
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
+    );
   }
 
   return apiOk(manifest, {
