@@ -16,7 +16,7 @@ constexpr const char* MQTT_CLIENT_ID = "";
 
 // Leave this blank to derive a unique fallback device ID from the ESP32 MAC.
 constexpr const char* DEVICE_ID = "shutter-dev-001";
-#define FIRMWARE_VERSION "0.1.1-dev-esp32"
+#define FIRMWARE_VERSION "0.1.2-dev-esp32"
 constexpr const char* COMMAND_TOPIC = "shutters/{deviceId}/commands";
 constexpr const char* STATUS_TOPIC = "shutters/{deviceId}/status";
 
@@ -66,6 +66,16 @@ constexpr const char* STATUS_TOPIC = "shutters/{deviceId}/status";
 // Keep this false for battery installs so the stepper coils release at idle.
 // Set it to true only if your hardware needs holding torque while parked.
 #define KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE false
+
+// Keep the software-controlled onboard LED off to reduce idle power draw.
+// This does not affect a hardwired power LED that some dev boards keep on.
+#define KEEP_ONBOARD_LED_OFF true
+#ifdef LED_BUILTIN
+#define ONBOARD_LED_PIN LED_BUILTIN
+#else
+#define ONBOARD_LED_PIN -1
+#endif
+#define ONBOARD_LED_ACTIVE_HIGH true
 
 // Enable a repeating SOS movement pattern that can be started from the app.
 #define ENABLE_SOS_MODE true

@@ -22,7 +22,7 @@
 
 // Older local config.h files might not define newer OTA settings yet.
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.1.1-dev-esp32"
+#define FIRMWARE_VERSION "0.1.2-dev-esp32"
 #endif
 
 #ifndef ENABLE_OTA_UPDATES
@@ -111,6 +111,22 @@
 
 #ifndef KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE
 #define KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE false
+#endif
+
+#ifndef KEEP_ONBOARD_LED_OFF
+#define KEEP_ONBOARD_LED_OFF true
+#endif
+
+#ifndef ONBOARD_LED_PIN
+#ifdef LED_BUILTIN
+#define ONBOARD_LED_PIN LED_BUILTIN
+#else
+#define ONBOARD_LED_PIN -1
+#endif
+#endif
+
+#ifndef ONBOARD_LED_ACTIVE_HIGH
+#define ONBOARD_LED_ACTIVE_HIGH true
 #endif
 
 #ifndef ENABLE_SOS_MODE
@@ -405,6 +421,26 @@ void logBootBanner() {
   Serial.print(" (");
   Serial.print(static_cast<int>(resetReason));
   Serial.println(")");
+}
+
+void configureOnboardLedPowerSaving() {
+  if (!KEEP_ONBOARD_LED_OFF) {
+    return;
+  }
+
+  if (ONBOARD_LED_PIN < 0) {
+    Serial.println("Onboard LED power save skipped: no controllable LED pin is configured.");
+    return;
+  }
+
+  pinMode(ONBOARD_LED_PIN, OUTPUT);
+  digitalWrite(
+    ONBOARD_LED_PIN,
+    ONBOARD_LED_ACTIVE_HIGH ? LOW : HIGH
+  );
+
+  Serial.print("Onboard LED forced off on pin ");
+  Serial.println(ONBOARD_LED_PIN);
 }
 
 bool isPositionEstimateUncertain() {
@@ -3099,6 +3135,7 @@ void setup() {
       : 0;
 
   logBootBanner();
+  configureOnboardLedPowerSaving();
   setDeviceMode(DEVICE_MODE_BOOTING);
 
   // Absolute position is still estimated in software only. Calibration keeps
