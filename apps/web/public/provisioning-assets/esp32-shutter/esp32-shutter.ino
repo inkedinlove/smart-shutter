@@ -22,7 +22,7 @@
 
 // Older local config.h files might not define newer OTA settings yet.
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.1.4-dev-esp32"
+#define FIRMWARE_VERSION "0.1.5-dev-esp32"
 #endif
 
 #ifndef ENABLE_OTA_UPDATES
@@ -243,6 +243,7 @@ constexpr bool SOS_SEQUENCE_PATTERN[] = {
 };
 constexpr size_t SOS_SEQUENCE_PATTERN_LENGTH =
   sizeof(SOS_SEQUENCE_PATTERN) / sizeof(SOS_SEQUENCE_PATTERN[0]);
+constexpr unsigned long CLOUD_CONFIG_ERROR_LOG_INTERVAL_MS = 30000UL;
 
 WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
@@ -262,6 +263,7 @@ unsigned long lastMqttRetryMs = 0;
 unsigned long lastAutoUpdateCheckMs = 0;
 unsigned long otaAutoCheckJitterMs = 0;
 unsigned long wifiAttemptStartedMs = 0;
+unsigned long lastCloudConfigErrorLogMs = 0;
 
 bool wifiConnectInProgress = false;
 bool lastMovingState = false;
@@ -887,6 +889,22 @@ bool hasUsableRuntimeCloudConnectionSettings() {
          hasText(runtimeApiBaseUrl);
 }
 
+void logMissingCloudConfigIfNeeded() {
+  const unsigned long now = millis();
+  if (
+    lastCloudConfigErrorLogMs != 0 &&
+    now - lastCloudConfigErrorLogMs < CLOUD_CONFIG_ERROR_LOG_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  lastCloudConfigErrorLogMs = now;
+  Serial.println("MQTT connect skipped: broker settings are not configured.");
+  Serial.println(
+    "Recovery flash must use real MQTT/API values, not placeholder config.h values."
+  );
+}
+
 bool deviceIdsMatch(const String& left, const String& right) {
   String normalizedLeft = left;
   String normalizedRight = right;
@@ -1258,6 +1276,7 @@ void resolveRuntimeCloudConnectionSettings() {
   runtimeMqttPassword = "";
   runtimeApiBaseUrl = "";
   Serial.println("Cloud config source: none");
+  Serial.println("Cloud config is missing or still set to placeholder values.");
 }
 
 bool savePersistedCloudConnectionSettings() {
@@ -3181,7 +3200,7 @@ bool connectMqtt() {
   }
 
   if (!hasUsableRuntimeMqttConnectionSettings()) {
-    Serial.println("MQTT connect skipped: broker settings are not configured.");
+    logMissingCloudConfigIfNeeded();
     setDeviceMode(DEVICE_MODE_ERROR);
     return false;
   }
