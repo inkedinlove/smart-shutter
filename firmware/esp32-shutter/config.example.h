@@ -20,7 +20,7 @@ constexpr const char* MQTT_CLIENT_ID = "";
 
 // Leave this blank to derive a unique fallback device ID from the ESP32 MAC.
 constexpr const char* DEVICE_ID = "";
-#define FIRMWARE_VERSION "0.1.7-dev-esp32"
+#define FIRMWARE_VERSION "0.1.8-dev-esp32"
 constexpr const char* COMMAND_TOPIC = "shutters/{deviceId}/commands";
 constexpr const char* STATUS_TOPIC = "shutters/{deviceId}/status";
 

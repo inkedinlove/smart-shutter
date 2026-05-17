@@ -22,7 +22,7 @@
 
 // Older local config.h files might not define newer OTA settings yet.
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.1.7-dev-esp32"
+#define FIRMWARE_VERSION "0.1.8-dev-esp32"
 #endif
 
 #ifndef ENABLE_OTA_UPDATES
@@ -244,6 +244,80 @@ constexpr bool SOS_SEQUENCE_PATTERN[] = {
 constexpr size_t SOS_SEQUENCE_PATTERN_LENGTH =
   sizeof(SOS_SEQUENCE_PATTERN) / sizeof(SOS_SEQUENCE_PATTERN[0]);
 constexpr unsigned long CLOUD_CONFIG_ERROR_LOG_INTERVAL_MS = 30000UL;
+constexpr size_t REMOTE_LOG_HISTORY_LIMIT = 48;
+constexpr size_t REMOTE_LOG_MAX_LINE_LENGTH = 220;
+
+void handleMirroredSerialCompletedLine(const String& line);
+
+HardwareSerial& hardwareSerialPort = ::Serial;
+
+class MirroredSerialPort : public Print {
+ public:
+  explicit MirroredSerialPort(HardwareSerial& port) : port_(port) {}
+
+  void begin(unsigned long baudRate) {
+    port_.begin(baudRate);
+  }
+
+  void flush() {
+    port_.flush();
+  }
+
+  int availableForWrite() override {
+    return port_.availableForWrite();
+  }
+
+  using Print::write;
+
+  size_t write(uint8_t value) override {
+    const size_t written = port_.write(value);
+    if (written > 0) {
+      captureByte(static_cast<char>(value));
+    }
+    return written;
+  }
+
+  size_t write(const uint8_t* buffer, size_t size) override {
+    const size_t written = port_.write(buffer, size);
+    for (size_t index = 0; index < written; index++) {
+      captureByte(static_cast<char>(buffer[index]));
+    }
+    return written;
+  }
+
+ private:
+  void captureByte(char value) {
+    if (value == '\r') {
+      return;
+    }
+
+    if (value == '\n') {
+      handleMirroredSerialCompletedLine(currentLine_);
+      currentLine_ = "";
+      lineOverflowed_ = false;
+      return;
+    }
+
+    if (lineOverflowed_) {
+      return;
+    }
+
+    currentLine_ += value;
+    if (currentLine_.length() >= REMOTE_LOG_MAX_LINE_LENGTH) {
+      currentLine_ =
+        currentLine_.substring(0, REMOTE_LOG_MAX_LINE_LENGTH - 3) + "...";
+      lineOverflowed_ = true;
+    }
+  }
+
+  HardwareSerial& port_;
+  String currentLine_ = "";
+  bool lineOverflowed_ = false;
+};
+
+MirroredSerialPort mirroredSerial(hardwareSerialPort);
+
+#define Serial mirroredSerial
 
 WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
@@ -315,6 +389,7 @@ String resolvedDeviceId = "";
 String resolvedMqttClientId = "";
 String resolvedCommandTopic = "";
 String resolvedStatusTopic = "";
+String resolvedRemoteLogTopic = "";
 String storedDeviceId = "";
 String storedMqttClientId = "";
 String storedCommandTopic = "";
@@ -330,6 +405,10 @@ String movementLockedReason =
 unsigned long setupPortalStartedMs = 0;
 unsigned long sosPauseUntilMs = 0;
 size_t sosSequenceIndex = 0;
+String remoteLogHistory[REMOTE_LOG_HISTORY_LIMIT];
+size_t remoteLogHistoryStartIndex = 0;
+size_t remoteLogHistoryCount = 0;
+unsigned long remoteLogSequence = 0;
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -420,6 +499,111 @@ const char* resetReasonToString(esp_reset_reason_t reason) {
       return "sdio_reset";
     default:
       return "unknown";
+  }
+}
+
+String buildRemoteLogTopicFromStatusTopic(const String& statusTopic) {
+  String topic = statusTopic;
+  topic.trim();
+
+  if (topic.length() == 0) {
+    if (resolvedDeviceId.length() == 0) {
+      return "";
+    }
+
+    return String("shutters/") + resolvedDeviceId + "/logs";
+  }
+
+  if (topic.endsWith("/status")) {
+    topic.remove(topic.length() - 7);
+    topic += "/logs";
+    return topic;
+  }
+
+  topic += "/logs";
+  return topic;
+}
+
+void rememberRemoteLogHistoryLine(const String& rawLine) {
+  String line = rawLine;
+  line.replace("\r", "");
+
+  if (line.length() == 0) {
+    return;
+  }
+
+  if (line.length() > REMOTE_LOG_MAX_LINE_LENGTH) {
+    line = line.substring(0, REMOTE_LOG_MAX_LINE_LENGTH - 3) + "...";
+  }
+
+  size_t insertIndex =
+    (remoteLogHistoryStartIndex + remoteLogHistoryCount) % REMOTE_LOG_HISTORY_LIMIT;
+
+  if (remoteLogHistoryCount == REMOTE_LOG_HISTORY_LIMIT) {
+    insertIndex = remoteLogHistoryStartIndex;
+    remoteLogHistoryStartIndex =
+      (remoteLogHistoryStartIndex + 1) % REMOTE_LOG_HISTORY_LIMIT;
+  } else {
+    remoteLogHistoryCount++;
+  }
+
+  remoteLogHistory[insertIndex] = line;
+}
+
+bool publishRemoteLogLine(const String& line, bool snapshot) {
+  if (!mqttClient.connected() || resolvedRemoteLogTopic.length() == 0 || line.length() == 0) {
+    return false;
+  }
+
+  StaticJsonDocument<448> logDoc;
+  logDoc["deviceId"] = resolvedDeviceId;
+  logDoc["resolvedDeviceId"] = resolvedDeviceId;
+  logDoc["firmwareVersion"] = FIRMWARE_VERSION;
+  logDoc["uptimeMs"] = millis();
+  logDoc["sequence"] = ++remoteLogSequence;
+  logDoc["snapshot"] = snapshot;
+  logDoc["line"] = line;
+
+  char payload[512];
+  const size_t payloadLength = serializeJson(logDoc, payload, sizeof(payload));
+  if (payloadLength == 0 || payloadLength >= sizeof(payload)) {
+    return false;
+  }
+
+  return mqttClient.publish(
+    resolvedRemoteLogTopic.c_str(),
+    reinterpret_cast<const uint8_t*>(payload),
+    payloadLength,
+    false
+  );
+}
+
+void publishRemoteLogSnapshot() {
+  if (!mqttClient.connected() || resolvedRemoteLogTopic.length() == 0) {
+    return;
+  }
+
+  for (size_t offset = 0; offset < remoteLogHistoryCount; offset++) {
+    const size_t index =
+      (remoteLogHistoryStartIndex + offset) % REMOTE_LOG_HISTORY_LIMIT;
+
+    if (remoteLogHistory[index].length() == 0) {
+      continue;
+    }
+
+    publishRemoteLogLine(remoteLogHistory[index], true);
+  }
+}
+
+void handleMirroredSerialCompletedLine(const String& line) {
+  if (line.length() == 0) {
+    return;
+  }
+
+  rememberRemoteLogHistoryLine(line);
+
+  if (mqttClient.connected()) {
+    publishRemoteLogLine(line, false);
   }
 }
 
@@ -1603,12 +1787,14 @@ size_t buildStatusPayload(
   reportedCapabilities.add("calibration");
   reportedCapabilities.add("movement_lock");
   reportedCapabilities.add("factory_setup_ap");
+  reportedCapabilities.add("remote_log_stream");
   if (ENABLE_SOS_MODE) {
     reportedCapabilities.add("sos_mode");
   }
   if (ENABLE_OTA_UPDATES) {
     reportedCapabilities.add("ota");
   }
+  statusDoc["remoteLogTopic"] = resolvedRemoteLogTopic;
   statusDoc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
   statusDoc["mqttConnected"] = mqttClient.connected();
   if (WiFi.status() == WL_CONNECTED) {
@@ -2728,6 +2914,12 @@ void handleCheckUpdateCommand(const char* source) {
   }
 }
 
+void handlePublishLogSnapshotCommand(const char* source) {
+  Serial.print("Command received: type=PUBLISH_LOG_SNAPSHOT source=");
+  Serial.println(source);
+  publishRemoteLogSnapshot();
+}
+
 bool otaCheckInProgress() {
   return otaState == OTA_STATE_CHECKING_MANIFEST ||
          otaState == OTA_STATE_UPDATE_AVAILABLE ||
@@ -3310,6 +3502,7 @@ bool connectMqtt() {
   Serial.print("Subscribed to command topic: ");
   Serial.println(resolvedCommandTopic);
 
+  publishRemoteLogSnapshot();
   lastCloudHealthyMs = millis();
   setDeviceMode(DEVICE_MODE_READY);
   publishStatus(true);
@@ -3341,6 +3534,11 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
 
   if (strcmp(type, "CHECK_UPDATE") == 0) {
     handleCheckUpdateCommand("mqtt");
+    return;
+  }
+
+  if (strcmp(type, "PUBLISH_LOG_SNAPSHOT") == 0) {
+    handlePublishLogSnapshotCommand("mqtt");
     return;
   }
 
@@ -3448,6 +3646,7 @@ void setup() {
     resolveTopic(COMMAND_TOPIC, storedCommandTopic, "commands");
   resolvedStatusTopic =
     resolveTopic(STATUS_TOPIC, storedStatusTopic, "status");
+  resolvedRemoteLogTopic = buildRemoteLogTopicFromStatusTopic(resolvedStatusTopic);
   setupPortalSsid = String(SETUP_AP_SSID_PREFIX) + getMacSuffixUpper();
 
   Serial.print("Resolved deviceId: ");
@@ -3458,6 +3657,8 @@ void setup() {
   Serial.println(resolvedCommandTopic);
   Serial.print("Resolved status topic: ");
   Serial.println(resolvedStatusTopic);
+  Serial.print("Resolved remote log topic: ");
+  Serial.println(resolvedRemoteLogTopic);
   Serial.println("MQTT topics resolved.");
 
   applyMotionProfile();

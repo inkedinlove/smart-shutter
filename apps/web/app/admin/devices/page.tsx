@@ -438,6 +438,12 @@ export default function AdminDevicesPage() {
                     </div>
 
                     <div className="flex flex-wrap gap-3 xl:col-span-3 xl:border-t xl:border-white/10 xl:pt-5 xl:justify-end">
+                      <Link
+                        className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-semibold text-slate-200 transition hover:border-cyan-300/30 hover:text-white"
+                        href={`/admin/devices/${encodeURIComponent(device.deviceId)}/serial-monitor`}
+                      >
+                        Wi-Fi serial
+                      </Link>
                       {device.claimState === "unclaimed" ? (
                         <Link
                           className="inline-flex items-center justify-center rounded-xl border border-cyan-300/30 bg-cyan-400/12 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/18"

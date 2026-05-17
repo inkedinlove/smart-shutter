@@ -1,7 +1,7 @@
 {
   "defaultChannel": "stable",
   "boards": {
-    "esp32": "0.1.7-dev-esp32",
+    "esp32": "0.1.8-dev-esp32",
     "esp8266": "0.1.0-dev-esp8266",
     "esp8266-d1d4": "0.1.0-dev-esp8266-d1d4",
     "esp8266-servo": "0.1.0-dev-esp8266-servo"
