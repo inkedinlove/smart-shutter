@@ -105,6 +105,7 @@ const MOVEMENT_SEQUENCE = [
 type ConnectWizardCommandInput =
   | { type: "SET_PERCENT"; value: number }
   | { type: "STOP" }
+  | { type: "CHECK_UPDATE" }
   | { type: "NUDGE_OPEN" | "NUDGE_CLOSE"; amount: number }
   | {
       type:
@@ -778,8 +779,12 @@ export default function ConnectWizard() {
       startTransition(() => {
         setDeviceStatus(latestStatus);
         setCheckResult(latestCheck);
-        setCurrentStepIndex(2);
-        setActionMessage(`Checked setup status for ${selectedDeviceId}.`);
+        setCurrentStepIndex(latestCheck.updateAvailable ? 1 : 2);
+        setActionMessage(
+          latestCheck.updateAvailable
+            ? `Firmware ${latestCheck.latestVersion ?? "update"} is available for ${selectedDeviceId}. Install the new firmware over Wi-Fi from this step, or continue setup and update later.`
+            : `Checked setup status for ${selectedDeviceId}.`,
+        );
       });
     } catch (error) {
       if (error instanceof SessionRequiredError) {
@@ -797,6 +802,9 @@ export default function ConnectWizard() {
 
   async function sendCommand(
     commandInput: ConnectWizardCommandInput,
+    options?: {
+      successMessage?: string;
+    },
   ): Promise<boolean> {
     if (!selectedDeviceId) {
       return false;
@@ -826,7 +834,8 @@ export default function ConnectWizard() {
       );
 
       setActionMessage(
-        getCommandSuccessMessage(selectedDeviceId, payload.command),
+        options?.successMessage ??
+          getCommandSuccessMessage(selectedDeviceId, payload.command),
       );
       setStatusRetryToken((current) => current + 1);
       return true;
@@ -856,6 +865,9 @@ export default function ConnectWizard() {
       : selectedDevice?.firmwareVersion ?? null);
   const latestFirmware =
     checkResult?.deviceId === selectedDeviceId ? checkResult.latestVersion : null;
+  const firmwareUpdateAvailable =
+    checkResult?.deviceId === selectedDeviceId &&
+    checkResult.updateAvailable === true;
   const safetyMode = selectedDeviceStatus?.safetyMode === true;
   const calibrationComplete = selectedDeviceStatus?.calibrationComplete === true;
   const fullTravelReady = selectedDeviceStatus?.fullTravelReady === true;
@@ -883,6 +895,30 @@ export default function ConnectWizard() {
       selectedDeviceStatus.online &&
       fullTravelReady,
   );
+  const deviceReadyForFirmwareInstall = Boolean(
+    firmwareUpdateAvailable &&
+      selectedDeviceStatus?.lastSeenAt &&
+      selectedDeviceStatus.online &&
+      selectedDeviceStatus.otaEnabled === true &&
+      selectedDeviceStatus.moving === false &&
+      (resolvedOtaState === "IDLE" ||
+        resolvedOtaState === "UPDATE_AVAILABLE" ||
+        resolvedOtaState === "FAILED"),
+  );
+  const firmwareInstallBlockedReason = !firmwareUpdateAvailable
+    ? null
+    : !selectedDeviceStatus?.lastSeenAt || !selectedDeviceStatus.online
+      ? "Bring the device online before starting the Wi-Fi install."
+      : selectedDeviceStatus.otaEnabled !== true
+        ? "This device is not reporting OTA-ready firmware yet."
+        : selectedDeviceStatus.moving === true
+          ? "Stop shutter movement before starting the update."
+          : resolvedOtaState &&
+              resolvedOtaState !== "IDLE" &&
+              resolvedOtaState !== "UPDATE_AVAILABLE" &&
+              resolvedOtaState !== "FAILED"
+            ? `Wait for OTA ${resolvedOtaState.replace(/_/g, " ").toLowerCase()} to finish before starting another install.`
+            : null;
   const showCompletedCalibrationState = calibrationComplete && !isRecalibrating;
   const movementLockedByOperator = (selectedDeviceStatus?.movementLockedReason ?? "")
     .toLowerCase()
@@ -995,11 +1031,18 @@ export default function ConnectWizard() {
     }
 
     return {
-        title: "A newer firmware version is available",
-        body: "Install the newer version before wider use.",
-        className: "border-amber-300/20 bg-amber-300/10 text-amber-100",
-      };
-  }, [checkResult, selectedDeviceId, selectedDeviceStatus]);
+      title: "A newer firmware version is available",
+      body: firmwareInstallBlockedReason
+        ? `Install the newer version before wider use. ${firmwareInstallBlockedReason}`
+        : "Install the newer version now over Wi-Fi, then continue setup.",
+      className: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+    };
+  }, [
+    checkResult,
+    firmwareInstallBlockedReason,
+    selectedDeviceId,
+    selectedDeviceStatus,
+  ]);
 
   const confirmSetupMessage = useMemo(() => {
     if (!selectedDeviceStatus?.lastSeenAt || !selectedDeviceStatus.online) {
@@ -1645,8 +1688,41 @@ export default function ConnectWizard() {
                     >
                       {isCheckingFirmware ? "Checking..." : "Check Firmware"}
                     </button>
+                    {firmwareUpdateAvailable ? (
+                      <button
+                        type="button"
+                        className="rounded-xl border border-amber-300/20 bg-amber-300/10 px-5 py-3 text-sm font-semibold text-amber-50 transition hover:bg-amber-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={
+                          isLoadingDevices ||
+                          isSendingCommand ||
+                          !selectedDeviceId ||
+                          !deviceReadyForFirmwareInstall
+                        }
+                        onClick={() => {
+                          if (!selectedDeviceId) {
+                            return;
+                          }
+
+                          void sendCommand(
+                            { type: "CHECK_UPDATE" },
+                            {
+                              successMessage: `Asked ${selectedDeviceId} to install ${latestFirmware ?? "the latest firmware"} over Wi-Fi.`,
+                            },
+                          );
+                        }}
+                      >
+                        {isSendingCommand
+                          ? "Starting install..."
+                          : "Install new firmware"}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
+                {firmwareUpdateAvailable && firmwareInstallBlockedReason ? (
+                  <p className="mt-4 text-sm leading-7 text-amber-100/80">
+                    {firmwareInstallBlockedReason}
+                  </p>
+                ) : null}
               </div>
             ) : null}
 

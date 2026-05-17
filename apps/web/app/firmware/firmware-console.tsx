@@ -415,6 +415,8 @@ export default function FirmwareConsole() {
     setActionMessage(null);
 
     try {
+      const updateReadyToInstall =
+        checkResult?.deviceId === deviceId && checkResult.updateAvailable === true;
       const response = await fetchWithShortTimeout("/api/device/command", {
         method: "POST",
         headers: {
@@ -435,7 +437,9 @@ export default function FirmwareConsole() {
 
       startTransition(() => {
         setActionMessage(
-          `Asked ${deviceId} to self-check for an update. If a compatible release is available, the device will download and install it over Wi-Fi when its safety checks allow it.`,
+          updateReadyToInstall
+            ? `Asked ${deviceId} to install ${checkResult?.latestVersion ?? "the latest firmware"} over Wi-Fi.`
+            : `Asked ${deviceId} to self-check for an update. If a compatible release is available, the device will download and install it over Wi-Fi when its safety checks allow it.`,
         );
       });
     } catch (error) {
@@ -548,7 +552,7 @@ export default function FirmwareConsole() {
   const deviceSelfCheckLabel = isSendingDeviceCheck
     ? "Checking device..."
     : releaseCheckShowsUpdate && deviceReportsOtaReady
-      ? "Install update on device"
+      ? "Install new firmware"
       : "Check/install on device";
   const activeErrorMessage = errorMessage ?? deviceRegistryError;
   const activeErrorNextAction = activeErrorMessage
