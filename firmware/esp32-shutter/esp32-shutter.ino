@@ -112,6 +112,38 @@
 #define KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE false
 #endif
 
+#ifndef ENABLE_SOS_MODE
+#define ENABLE_SOS_MODE true
+#endif
+
+#ifndef SOS_SHORT_PULSE_PERCENT
+#define SOS_SHORT_PULSE_PERCENT 2
+#endif
+
+#ifndef SOS_LONG_PULSE_PERCENT
+#define SOS_LONG_PULSE_PERCENT 5
+#endif
+
+#ifndef SOS_PULSE_GAP_MS
+#define SOS_PULSE_GAP_MS 180UL
+#endif
+
+#ifndef SOS_LETTER_GAP_MS
+#define SOS_LETTER_GAP_MS 420UL
+#endif
+
+#ifndef SOS_WORD_GAP_MS
+#define SOS_WORD_GAP_MS 900UL
+#endif
+
+#ifndef SOS_MOTOR_MAX_SPEED
+#define SOS_MOTOR_MAX_SPEED 900.0f
+#endif
+
+#ifndef SOS_MOTOR_ACCELERATION
+#define SOS_MOTOR_ACCELERATION 500.0f
+#endif
+
 // -----------------------------------------------------------------------------
 // Device Configuration
 // -----------------------------------------------------------------------------
@@ -169,10 +201,30 @@ struct OtaDownloadResult {
   size_t downloadedBytes = 0;
 };
 
+enum SosPhase {
+  SOS_PHASE_IDLE,
+  SOS_PHASE_PULSE_OUT,
+  SOS_PHASE_PULSE_BACK,
+  SOS_PHASE_PAUSE,
+};
+
 constexpr long MIN_CALIBRATION_SPAN_STEPS = 64L;
 constexpr uint8_t CALIBRATION_ENDPOINT_CLOSED = 0x01;
 constexpr uint8_t CALIBRATION_ENDPOINT_OPEN = 0x02;
 constexpr uint8_t PERSISTED_SETTINGS_VERSION = 1;
+constexpr bool SOS_SEQUENCE_PATTERN[] = {
+  false,
+  false,
+  false,
+  true,
+  true,
+  true,
+  false,
+  false,
+  false,
+};
+constexpr size_t SOS_SEQUENCE_PATTERN_LENGTH =
+  sizeof(SOS_SEQUENCE_PATTERN) / sizeof(SOS_SEQUENCE_PATTERN[0]);
 
 WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
@@ -207,16 +259,22 @@ bool calibrationComplete = !SAFE_SETUP_MODE;
 bool movementLocked = false;
 bool stepperOutputsEnabled = true;
 bool wifiPowerSaveEnabled = false;
+bool sosActive = false;
 
 int targetPercent = 0;
 long calibratedClosedPositionSteps = 0;
 long calibratedOpenPositionSteps = TRAVEL_STEPS;
 long lastPersistedPositionSteps = 0;
 long lastPersistedTargetSteps = 0;
+long sosAnchorPositionSteps = 0;
+long sosShortPulseSteps = 0;
+long sosLongPulseSteps = 0;
+long sosPulseDirectionSign = 1L;
 uint8_t calibrationEndpointMask = 0;
 OtaState otaState = ENABLE_OTA_UPDATES ? OTA_STATE_IDLE : OTA_STATE_DISABLED;
 PositionEstimateState positionEstimateState =
   POSITION_ESTIMATE_NEEDS_VERIFICATION;
+SosPhase sosPhase = SOS_PHASE_IDLE;
 String otaLastError = "";
 String otaTargetVersion = "";
 bool otaAutoUpdateEnabled = false;
@@ -238,6 +296,8 @@ String lastCalibrationAction =
 String movementLockedReason =
   SAFE_SETUP_MODE ? "Calibration required before larger movement." : "";
 unsigned long setupPortalStartedMs = 0;
+unsigned long sosPauseUntilMs = 0;
+size_t sosSequenceIndex = 0;
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -401,6 +461,9 @@ bool isMoving() {
   return stepper.distanceToGo() != 0;
 }
 
+void applyMotionProfile();
+bool savePersistedDeviceSettings(const String& ssid, const String& password);
+
 unsigned long getStatusPublishIntervalMs(bool movingNow) {
   return movingNow ? MOVING_STATUS_INTERVAL_MS : IDLE_STATUS_INTERVAL_MS;
 }
@@ -428,6 +491,127 @@ void syncStepperPowerState() {
   setStepperOutputsEnabled(
     KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE || isMoving()
   );
+}
+
+bool isSosModeActive() {
+  return ENABLE_SOS_MODE && sosActive;
+}
+
+long getSosPulseStepsForPercent(int percent) {
+  return max(1L, scaleMagnitudeByPercent(getCalibrationTravelSpanMagnitude(), percent));
+}
+
+long getSosDirectionSign(long anchorPositionSteps) {
+  const long openDirectionSign = getOpenDirectionStepSign();
+
+  if (!hasFullTravelCalibration()) {
+    return openDirectionSign;
+  }
+
+  const long roomToOpen = labs(calibratedOpenPositionSteps - anchorPositionSteps);
+  const long roomToClosed = labs(anchorPositionSteps - calibratedClosedPositionSteps);
+
+  return roomToOpen >= roomToClosed ? openDirectionSign : -openDirectionSign;
+}
+
+long getSosAvailableRoomSteps(long anchorPositionSteps, long directionSign) {
+  if (!hasFullTravelCalibration()) {
+    return getCalibrationTravelSpanMagnitude();
+  }
+
+  return directionSign == getOpenDirectionStepSign()
+    ? labs(calibratedOpenPositionSteps - anchorPositionSteps)
+    : labs(anchorPositionSteps - calibratedClosedPositionSteps);
+}
+
+unsigned long getSosPauseDurationMs(size_t completedSequenceIndex) {
+  if (completedSequenceIndex + 1 >= SOS_SEQUENCE_PATTERN_LENGTH) {
+    return SOS_WORD_GAP_MS;
+  }
+
+  if (completedSequenceIndex == 2 || completedSequenceIndex == 5) {
+    return SOS_LETTER_GAP_MS;
+  }
+
+  return SOS_PULSE_GAP_MS;
+}
+
+void clearSosModeState(bool restoreMotionProfile = true) {
+  sosActive = false;
+  sosPhase = SOS_PHASE_IDLE;
+  sosPauseUntilMs = 0;
+  sosSequenceIndex = 0;
+
+  if (restoreMotionProfile) {
+    applyMotionProfile();
+  }
+}
+
+void cancelSosModeForCommand(const char* commandType) {
+  if (!isSosModeActive()) {
+    return;
+  }
+
+  Serial.print("Cancelling SOS mode for ");
+  Serial.println(commandType);
+  clearSosModeState();
+}
+
+void beginSosPulseOut() {
+  if (!isSosModeActive()) {
+    return;
+  }
+
+  const bool pulseIsLong = SOS_SEQUENCE_PATTERN[sosSequenceIndex];
+  const long pulseSteps = pulseIsLong ? sosLongPulseSteps : sosShortPulseSteps;
+
+  setStepperOutputsEnabled(true);
+  stepper.setMaxSpeed(SOS_MOTOR_MAX_SPEED);
+  stepper.setAcceleration(SOS_MOTOR_ACCELERATION);
+  stepper.moveTo(sosAnchorPositionSteps + (sosPulseDirectionSign * pulseSteps));
+  sosPhase = SOS_PHASE_PULSE_OUT;
+  sosPauseUntilMs = 0;
+  capturePositionSnapshot(true);
+  savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
+}
+
+void beginSosReturnToAnchor() {
+  if (!isSosModeActive()) {
+    return;
+  }
+
+  setStepperOutputsEnabled(true);
+  stepper.setMaxSpeed(SOS_MOTOR_MAX_SPEED);
+  stepper.setAcceleration(SOS_MOTOR_ACCELERATION);
+  stepper.moveTo(sosAnchorPositionSteps);
+  sosPhase = SOS_PHASE_PULSE_BACK;
+  capturePositionSnapshot(true);
+  savePersistedDeviceSettings(runtimeWifiSsid, runtimeWifiPassword);
+}
+
+void maintainSosMode() {
+  if (!isSosModeActive() || isMoving()) {
+    return;
+  }
+
+  const unsigned long now = millis();
+
+  if (sosPhase == SOS_PHASE_PULSE_OUT) {
+    beginSosReturnToAnchor();
+    return;
+  }
+
+  if (sosPhase == SOS_PHASE_PULSE_BACK) {
+    sosPhase = SOS_PHASE_PAUSE;
+    sosPauseUntilMs = now + getSosPauseDurationMs(sosSequenceIndex);
+    sosSequenceIndex = (sosSequenceIndex + 1) % SOS_SEQUENCE_PATTERN_LENGTH;
+    syncStepperPowerState();
+    return;
+  }
+
+  if (sosPhase == SOS_PHASE_PAUSE && now >= sosPauseUntilMs) {
+    beginSosPulseOut();
+  }
 }
 
 void setWiFiPowerSaveEnabled(bool enabled) {
@@ -950,7 +1134,7 @@ size_t buildStatusPayload(
   DeviceMode modeValue,
   bool movingValue
 ) {
-  StaticJsonDocument<1536> statusDoc;
+  StaticJsonDocument<1792> statusDoc;
   statusDoc["deviceId"] = resolvedDeviceId;
   statusDoc["resolvedDeviceId"] = resolvedDeviceId;
   statusDoc["setupMode"] = setupPortalActive;
@@ -973,6 +1157,9 @@ size_t buildStatusPayload(
   reportedCapabilities.add("calibration");
   reportedCapabilities.add("movement_lock");
   reportedCapabilities.add("factory_setup_ap");
+  if (ENABLE_SOS_MODE) {
+    reportedCapabilities.add("sos_mode");
+  }
   if (ENABLE_OTA_UPDATES) {
     reportedCapabilities.add("ota");
   }
@@ -999,6 +1186,7 @@ size_t buildStatusPayload(
   } else {
     statusDoc["otaTargetVersion"] = nullptr;
   }
+  statusDoc["sosActive"] = isSosModeActive();
   statusDoc["calibrationComplete"] = calibrationComplete;
   statusDoc["fullTravelReady"] = hasFullTravelCalibration();
   statusDoc["directionInverted"] = directionInverted;
@@ -1054,6 +1242,8 @@ void logStatusSummary(bool published, DeviceMode modeValue, bool movingValue) {
   Serial.print(directionInverted ? "reversed" : "normal");
   Serial.print(" positionState=");
   Serial.print(positionEstimateStateToString(positionEstimateState));
+  Serial.print(" sos=");
+  Serial.print(isSosModeActive() ? "true" : "false");
   Serial.print(" ota=");
   Serial.println(otaStateToString(otaState));
 }
@@ -1063,7 +1253,7 @@ void publishStatus(bool forceLog) {
     return;
   }
 
-  char payload[1536];
+  char payload[1792];
   const bool movingNow = isMoving();
   const DeviceMode reportedMode =
     movingNow ? DEVICE_MODE_MOVING : deviceMode;
@@ -1143,6 +1333,7 @@ bool ensureCalibrationCommandCanRun(const char* actionName) {
 }
 
 void handleSetPercentCommand(int nextPercent, const char* source) {
+  cancelSosModeForCommand("SET_PERCENT");
   const int currentPercent = stepsToPercent(stepper.currentPosition());
   targetPercent = constrain(nextPercent, 0, 100);
   const int requestedDelta = abs(targetPercent - currentPercent);
@@ -1175,6 +1366,7 @@ void handleSetPercentCommand(int nextPercent, const char* source) {
 }
 
 void handleNudgeCommand(bool opening, int requestedAmount, const char* source) {
+  cancelSosModeForCommand(opening ? "NUDGE_OPEN" : "NUDGE_CLOSE");
   const int currentPercent = stepsToPercent(stepper.currentPosition());
   const int amount =
     constrain(requestedAmount, 1, getAllowedMaxPercentStep());
@@ -1236,6 +1428,8 @@ void handleSetCurrentAsClosedCommand(const char* source) {
     return;
   }
 
+  cancelSosModeForCommand("SET_CURRENT_AS_CLOSED");
+
   const long directionSign = getOpenDirectionStepSign();
   calibratedClosedPositionSteps = stepper.currentPosition();
   calibratedOpenPositionSteps =
@@ -1264,6 +1458,8 @@ void handleSetCurrentAsOpenCommand(const char* source) {
   if (!ensureCalibrationCommandCanRun("SET_CURRENT_AS_OPEN")) {
     return;
   }
+
+  cancelSosModeForCommand("SET_CURRENT_AS_OPEN");
 
   calibratedOpenPositionSteps = stepper.currentPosition();
 
@@ -1300,6 +1496,8 @@ void handleMarkCalibrationCompleteCommand(const char* source) {
     return;
   }
 
+  cancelSosModeForCommand("MARK_CALIBRATION_COMPLETE");
+
   if (!hasMeaningfulCalibrationSpan()) {
     rejectMovementCommand(
       "MARK_CALIBRATION_COMPLETE",
@@ -1333,6 +1531,10 @@ void handleSetDirectionCommand(bool nextDirectionInverted, const char* source) {
     return;
   }
 
+  cancelSosModeForCommand(
+    nextDirectionInverted ? "SET_DIRECTION_REVERSED" : "SET_DIRECTION_NORMAL"
+  );
+
   directionInverted = nextDirectionInverted;
   resetCalibrationRangeToDefaults();
   positionVerified = false;
@@ -1363,6 +1565,7 @@ void handleLockMovementCommand(const char* source) {
   Serial.print("Command received: type=LOCK_MOVEMENT source=");
   Serial.println(source);
 
+  cancelSosModeForCommand("LOCK_MOVEMENT");
   movementLocked = true;
   rememberCalibrationAction("LOCK_MOVEMENT");
   stepper.stop();
@@ -1377,8 +1580,97 @@ void handleUnlockMovementCommand(const char* source) {
   Serial.print("Command received: type=UNLOCK_MOVEMENT source=");
   Serial.println(source);
 
+  cancelSosModeForCommand("UNLOCK_MOVEMENT");
   movementLocked = false;
   rememberCalibrationAction("UNLOCK_MOVEMENT");
+  syncMovementLockedReason();
+  setDeviceMode(isMoving() ? DEVICE_MODE_MOVING : getIdleModeFromConnectivity());
+  publishStatus(true);
+}
+
+void handleStartSosCommand(const char* source) {
+  Serial.print("Command received: type=START_SOS source=");
+  Serial.println(source);
+
+  if (!ENABLE_SOS_MODE) {
+    rejectMovementCommand("START_SOS", "SOS mode is disabled in this firmware.");
+    return;
+  }
+
+  if (movementLocked) {
+    rejectMovementCommand("START_SOS", "Movement locked by operator.");
+    return;
+  }
+
+  if (isPositionEstimateUncertain()) {
+    rejectMovementCommand("START_SOS", buildPositionEstimateReason());
+    return;
+  }
+
+  if (!hasFullTravelCalibration()) {
+    rejectMovementCommand(
+      "START_SOS",
+      "SOS mode needs the true closed and open positions saved first."
+    );
+    return;
+  }
+
+  sosAnchorPositionSteps = stepper.currentPosition();
+  sosPulseDirectionSign = getSosDirectionSign(sosAnchorPositionSteps);
+
+  const long availableRoomSteps =
+    getSosAvailableRoomSteps(sosAnchorPositionSteps, sosPulseDirectionSign);
+  if (availableRoomSteps <= 0) {
+    rejectMovementCommand(
+      "START_SOS",
+      "Move the shutter away from its endpoint before starting SOS mode."
+    );
+    return;
+  }
+
+  const long preferredShortPulseSteps =
+    getSosPulseStepsForPercent(SOS_SHORT_PULSE_PERCENT);
+  const long preferredLongPulseSteps =
+    getSosPulseStepsForPercent(SOS_LONG_PULSE_PERCENT);
+
+  sosLongPulseSteps = min(preferredLongPulseSteps, availableRoomSteps);
+  sosShortPulseSteps = min(
+    preferredShortPulseSteps,
+    max(1L, sosLongPulseSteps / 2L)
+  );
+
+  if (sosLongPulseSteps <= 0 || sosShortPulseSteps <= 0) {
+    rejectMovementCommand(
+      "START_SOS",
+      "Not enough safe travel room is available for SOS mode."
+    );
+    return;
+  }
+
+  sosActive = true;
+  sosPhase = SOS_PHASE_IDLE;
+  sosPauseUntilMs = 0;
+  sosSequenceIndex = 0;
+  beginSosPulseOut();
+  syncMovementLockedReason();
+  setDeviceMode(isMoving() ? DEVICE_MODE_MOVING : getIdleModeFromConnectivity());
+  publishStatus(true);
+}
+
+void handleEndSosCommand(const char* source) {
+  Serial.print("Command received: type=END_SOS source=");
+  Serial.println(source);
+
+  if (!isSosModeActive()) {
+    setDeviceMode(isMoving() ? DEVICE_MODE_MOVING : getIdleModeFromConnectivity());
+    publishStatus(true);
+    return;
+  }
+
+  clearSosModeState();
+  stepper.stop();
+  syncStepperPowerState();
+  updateTargetPercentFromStepper();
   syncMovementLockedReason();
   setDeviceMode(isMoving() ? DEVICE_MODE_MOVING : getIdleModeFromConnectivity());
   publishStatus(true);
@@ -1390,6 +1682,7 @@ void handleStopCommand(const char* source) {
   Serial.print(", distanceToGo=");
   Serial.println(stepper.distanceToGo());
 
+  clearSosModeState();
   stepper.stop();
   syncStepperPowerState();
   updateTargetPercentFromStepper();
@@ -2255,7 +2548,7 @@ void handleLocalRoot() {
 }
 
 void handleLocalStatus() {
-  char payload[1536];
+  char payload[1792];
   const size_t payloadLength = buildStatusPayload(
     payload,
     sizeof(payload),
@@ -2489,7 +2782,7 @@ bool connectMqtt() {
   lastMqttRetryMs = now;
   setDeviceMode(DEVICE_MODE_MQTT_CONNECTING);
 
-  char offlinePayload[1536];
+  char offlinePayload[1792];
   const size_t offlinePayloadLength = buildStatusPayload(
     offlinePayload,
     sizeof(offlinePayload),
@@ -2560,6 +2853,16 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
 
   if (strcmp(type, "CHECK_UPDATE") == 0) {
     handleCheckUpdateCommand("mqtt");
+    return;
+  }
+
+  if (strcmp(type, "START_SOS") == 0) {
+    handleStartSosCommand("mqtt");
+    return;
+  }
+
+  if (strcmp(type, "END_SOS") == 0) {
+    handleEndSosCommand("mqtt");
     return;
   }
 
@@ -2691,7 +2994,7 @@ void setup() {
 
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCallback(onMqttMessage);
-  mqttClient.setBufferSize(1536);
+  mqttClient.setBufferSize(2048);
   mqttClient.setKeepAlive(MQTT_KEEP_ALIVE_SECONDS);
 
   setOtaState(
@@ -2733,7 +3036,7 @@ void loop() {
     Serial.println(movingNow ? "moving" : "idle");
 
     lastMovingState = movingNow;
-    if (!movingNow) {
+    if (!movingNow && !(isSosModeActive() && sosPhase == SOS_PHASE_PULSE_OUT)) {
       setPositionEstimateState(
         positionVerified
           ? POSITION_ESTIMATE_TRACKED
@@ -2758,5 +3061,6 @@ void loop() {
     publishStatus();
   }
 
+  maintainSosMode();
   maybeRunAutoUpdateCheck();
 }

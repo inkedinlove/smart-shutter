@@ -49,6 +49,10 @@ function positionNeedsVerification(status: DeviceStatus | null): boolean {
   return status?.positionEstimateState === "needs_verification";
 }
 
+function supportsSosMode(status: DeviceStatus | null): boolean {
+  return status?.reportedCapabilities?.includes("sos_mode") ?? false;
+}
+
 function requiresLiveStatus(commandType: string): boolean {
   return commandType !== "STOP" && commandType !== "CHECK_UPDATE";
 }
@@ -181,6 +185,64 @@ export async function POST(request: Request) {
       deviceId: device.deviceId,
       commandId: crypto.randomUUID(),
       type: "CHECK_UPDATE",
+      issuedAt: new Date().toISOString(),
+      source: "web",
+    };
+  } else if (commandType === "START_SOS" || commandType === "END_SOS") {
+    if (!supportsSosMode(liveStatus)) {
+      await auditCommand({
+        deviceId: device.deviceId,
+        actorProfileId,
+        commandType,
+        result: "blocked_unsupported_firmware",
+      });
+
+      return apiError(
+        "This device needs the latest SOS-capable firmware before SOS mode can be used.",
+        409,
+      );
+    }
+
+    if (
+      commandType === "START_SOS" &&
+      positionNeedsVerification(liveStatus)
+    ) {
+      await auditCommand({
+        deviceId: device.deviceId,
+        actorProfileId,
+        commandType,
+        result: "blocked_position_verification_required",
+      });
+
+      return apiError(
+        liveStatus?.positionEstimateReason ??
+          "Verify the shutter's current position before starting SOS mode.",
+        409,
+      );
+    }
+
+    if (
+      commandType === "START_SOS" &&
+      liveStatus?.fullTravelReady !== true
+    ) {
+      await auditCommand({
+        deviceId: device.deviceId,
+        actorProfileId,
+        commandType,
+        result: "blocked_calibration",
+        detail: "sos_requires_full_travel",
+      });
+
+      return apiError(
+        "SOS mode needs the true closed and open positions saved first so the shutter has a safe travel range.",
+        409,
+      );
+    }
+
+    command = {
+      deviceId: device.deviceId,
+      commandId: crypto.randomUUID(),
+      type: commandType,
       issuedAt: new Date().toISOString(),
       source: "web",
     };
@@ -328,7 +390,7 @@ export async function POST(request: Request) {
     };
   } else {
     return apiError(
-      "The `type` field must be one of `SET_PERCENT`, `STOP`, `CHECK_UPDATE`, `NUDGE_OPEN`, `NUDGE_CLOSE`, `SET_CURRENT_AS_CLOSED`, `SET_CURRENT_AS_OPEN`, `SET_DIRECTION_NORMAL`, `SET_DIRECTION_REVERSED`, `MARK_CALIBRATION_COMPLETE`, `LOCK_MOVEMENT`, or `UNLOCK_MOVEMENT`.",
+      "The `type` field must be one of `SET_PERCENT`, `STOP`, `CHECK_UPDATE`, `START_SOS`, `END_SOS`, `NUDGE_OPEN`, `NUDGE_CLOSE`, `SET_CURRENT_AS_CLOSED`, `SET_CURRENT_AS_OPEN`, `SET_DIRECTION_NORMAL`, `SET_DIRECTION_REVERSED`, `MARK_CALIBRATION_COMPLETE`, `LOCK_MOVEMENT`, or `UNLOCK_MOVEMENT`.",
       400,
     );
   }

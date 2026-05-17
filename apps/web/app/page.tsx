@@ -27,6 +27,9 @@ type DashboardCommandInput =
     }
   | {
       type: "STOP";
+    }
+  | {
+      type: "START_SOS" | "END_SOS";
     };
 
 const PRESET_VALUES = [0, 25, 50, 75, 100] as const;
@@ -120,6 +123,10 @@ function getPositionEstimateNote(status: DeviceStatus): string {
   }
 
   return "Updated from live device status";
+}
+
+function getSosButtonLabel(status: DeviceStatus): string {
+  return status.sosActive ? "END SOS" : "SOS";
 }
 
 export default function Home() {
@@ -262,14 +269,27 @@ export default function Home() {
       setSliderValue(commandInput.value);
     }
 
-    const requestBody: DeviceCommandInput =
-      commandInput.type === "STOP"
-        ? { deviceId: selectedDeviceId, type: "STOP" }
-        : {
-            deviceId: selectedDeviceId,
-            type: "SET_PERCENT",
-            value: commandInput.value,
-          };
+    let requestBody: DeviceCommandInput;
+
+    switch (commandInput.type) {
+      case "STOP":
+        requestBody = { deviceId: selectedDeviceId, type: "STOP" };
+        break;
+      case "START_SOS":
+      case "END_SOS":
+        requestBody = {
+          deviceId: selectedDeviceId,
+          type: commandInput.type,
+        };
+        break;
+      case "SET_PERCENT":
+        requestBody = {
+          deviceId: selectedDeviceId,
+          type: "SET_PERCENT",
+          value: commandInput.value,
+        };
+        break;
+    }
 
     try {
       const response = await fetchWithShortTimeout("/api/device/command", {
@@ -289,6 +309,22 @@ export default function Home() {
 
       if (payload.command?.type === "STOP") {
         setFeedback(`Sent STOP command to ${selectedDeviceId}.`);
+        setStatus((currentStatus) => ({
+          ...currentStatus,
+          sosActive: false,
+        }));
+      } else if (payload.command?.type === "START_SOS") {
+        setFeedback(`Started SOS mode on ${selectedDeviceId}.`);
+        setStatus((currentStatus) => ({
+          ...currentStatus,
+          sosActive: true,
+        }));
+      } else if (payload.command?.type === "END_SOS") {
+        setFeedback(`Asked ${selectedDeviceId} to end SOS mode.`);
+        setStatus((currentStatus) => ({
+          ...currentStatus,
+          sosActive: false,
+        }));
       } else if (commandInput.type === "SET_PERCENT") {
         setFeedback(`Sent ${commandInput.value}% command to ${selectedDeviceId}.`);
       } else {
@@ -567,9 +603,34 @@ export default function Home() {
               </button>
             </div>
 
+            <div className="mt-3">
+              <button
+                type="button"
+                className={`w-full rounded-xl border px-4 py-4 text-base font-semibold uppercase tracking-[0.18em] transition disabled:cursor-not-allowed disabled:opacity-50 ${status.sosActive ? "border-amber-300/40 bg-amber-300/15 text-amber-50 hover:bg-amber-300/25" : "border-rose-300/35 bg-rose-300/15 text-rose-50 hover:bg-rose-300/25"}`}
+                disabled={isSending || !selectedDeviceId}
+                onClick={() => {
+                  void sendCommand({
+                    type: status.sosActive ? "END_SOS" : "START_SOS",
+                  });
+                }}
+              >
+                {isSending ? "Sending..." : getSosButtonLabel(status)}
+              </button>
+            </div>
+
             <p className="mt-4 text-sm text-slate-400">
               Use STOP immediately if the shutter sounds strained or moves the wrong way.
             </p>
+
+            <p className="mt-2 text-sm text-slate-400">
+              SOS mode runs a repeating emergency signal until you choose END SOS or STOP.
+            </p>
+
+            {status.sosActive ? (
+              <p className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
+                SOS mode is active on this shutter.
+              </p>
+            ) : null}
 
             {feedback ? (
               <p className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">

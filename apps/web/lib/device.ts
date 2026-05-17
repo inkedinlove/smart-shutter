@@ -78,6 +78,13 @@ export type DeviceCommand =
   | {
       deviceId: string;
       commandId: string;
+      type: "START_SOS" | "END_SOS";
+      issuedAt: string;
+      source: "web";
+    }
+  | {
+      deviceId: string;
+      commandId: string;
       type: "NUDGE_OPEN" | "NUDGE_CLOSE";
       amount: number;
       issuedAt: string;
@@ -111,6 +118,10 @@ export type DeviceCommandInput =
   | {
       deviceId: string;
       type: "CHECK_UPDATE";
+    }
+  | {
+      deviceId: string;
+      type: "START_SOS" | "END_SOS";
     }
   | {
       deviceId: string;
@@ -151,6 +162,7 @@ export type DeviceStatus = {
   otaState?: OtaState;
   otaLastError?: string;
   otaTargetVersion?: string;
+  sosActive?: boolean;
   calibrationComplete?: boolean;
   fullTravelReady?: boolean;
   directionInverted?: boolean;
@@ -369,6 +381,7 @@ export function createDefaultDeviceStatus(
     otaState: undefined,
     otaLastError: undefined,
     otaTargetVersion: undefined,
+    sosActive: undefined,
     calibrationComplete: undefined,
     fullTravelReady: undefined,
     directionInverted: undefined,

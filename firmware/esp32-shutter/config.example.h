@@ -67,6 +67,18 @@ constexpr const char* STATUS_TOPIC = "shutters/{deviceId}/status";
 // Set it to true only if your hardware needs holding torque while parked.
 #define KEEP_MOTOR_COILS_ENERGIZED_WHEN_IDLE false
 
+// Enable a repeating SOS movement pattern that can be started from the app.
+#define ENABLE_SOS_MODE true
+
+// SOS uses small repeated shutter pulses around the current position.
+#define SOS_SHORT_PULSE_PERCENT 2
+#define SOS_LONG_PULSE_PERCENT 5
+#define SOS_PULSE_GAP_MS 180UL
+#define SOS_LETTER_GAP_MS 420UL
+#define SOS_WORD_GAP_MS 900UL
+#define SOS_MOTOR_MAX_SPEED 900.0f
+#define SOS_MOTOR_ACCELERATION 500.0f
+
 // ---------------------------------------------------------------------------
 // Motor Wiring and Motion Tuning
 // ---------------------------------------------------------------------------

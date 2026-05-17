@@ -153,6 +153,7 @@ export function createFirmwareDefinesPreview(
 ): string {
   const otaEnabled =
     device.board === "esp32" || device.board === "esp8266-d1d4";
+  const sosEnabled = device.board === "esp32";
 
   return [
     `// Board: ${formatDeviceBoardLabel(device.board)}`,
@@ -174,6 +175,18 @@ export function createFirmwareDefinesPreview(
           "#define OTA_AUTO_CHECK_INITIAL_DELAY_MS 300000UL",
           "#define OTA_AUTO_CHECK_INTERVAL_MS 21600000UL",
           "#define OTA_AUTO_CHECK_JITTER_MS 900000UL",
+        ]
+      : []),
+    ...(sosEnabled
+      ? [
+          "#define ENABLE_SOS_MODE true",
+          "#define SOS_SHORT_PULSE_PERCENT 2",
+          "#define SOS_LONG_PULSE_PERCENT 5",
+          "#define SOS_PULSE_GAP_MS 180UL",
+          "#define SOS_LETTER_GAP_MS 420UL",
+          "#define SOS_WORD_GAP_MS 900UL",
+          "#define SOS_MOTOR_MAX_SPEED 900.0f",
+          "#define SOS_MOTOR_ACCELERATION 500.0f",
         ]
       : []),
   ].join("\n");
