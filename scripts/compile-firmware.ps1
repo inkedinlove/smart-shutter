@@ -7,10 +7,18 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$syncScriptPath = Join-Path $repoRoot "scripts\sync-firmware-versions.mjs"
 $resolvedSketchDir = Join-Path $repoRoot $SketchDir
 $resolvedOutputDir = Join-Path $repoRoot $OutputDir
 $configPath = Join-Path $resolvedSketchDir "config.h"
 $configExamplePath = Join-Path $resolvedSketchDir "config.example.h"
+
+if (Test-Path $syncScriptPath) {
+  & node $syncScriptPath
+  if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+  }
+}
 
 function Get-RepoRelativePath {
   param(

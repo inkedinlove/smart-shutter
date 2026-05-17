@@ -1,4 +1,5 @@
 import devicesRegistry from "@/devices/devices.json";
+import { getDefaultFirmwareVersion } from "@/lib/firmware-versioning";
 
 export type BrokerProfile = "hivemq-dev";
 export const DEVICE_BOARD_VALUES = [
@@ -92,8 +93,6 @@ export type DeviceProvisioningData = {
   firmwareDefinesPreview: string;
 };
 
-const DEFAULT_FIRMWARE_VERSION = "0.1.0-dev";
-
 type DeviceRegistry = {
   defaultDeviceId: string;
   devices: RegisteredDevice[];
@@ -158,7 +157,7 @@ export function createFirmwareDefinesPreview(
   return [
     `// Board: ${formatDeviceBoardLabel(device.board)}`,
     `#define DEVICE_ID "${device.deviceId}"`,
-    `#define FIRMWARE_VERSION "${DEFAULT_FIRMWARE_VERSION}"`,
+    `#define FIRMWARE_VERSION "${getDefaultFirmwareVersion(device.board)}"`,
     `#define MQTT_HOST "${broker.mqttHost}"`,
     `#define MQTT_PORT ${broker.mqttPort}`,
     '#define MQTT_USERNAME "PASTE_USERNAME"',

@@ -15,26 +15,33 @@ import type {
   FirmwareReleaseInput,
   FirmwareReleaseRecord,
 } from "@/lib/firmware";
+import {
+  compareFirmwareVersions,
+  getDefaultFirmwareChannel,
+  getFirmwareVersionCatalog,
+  isFirmwareUpdateAvailable,
+  isValidFirmwareVersion,
+} from "@/lib/firmware-versioning";
 
-const DEFAULT_FIRMWARE_CHANNEL = "stable";
 const DEFAULT_FIRMWARE_BOARD = "esp32";
 const MAX_FIRMWARE_SIZE_BYTES = 16 * 1024 * 1024;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 
-const FALLBACK_RELEASES: FirmwareReleaseRecord[] = [
-  {
-    version: "0.1.0-dev",
-    channel: "stable",
-    board: "esp32",
-    artifactUrl: "https://example.com/firmware/smart-shutter-0.1.0-dev.bin",
-    sha256:
-      "0000000000000000000000000000000000000000000000000000000000000000",
-    sizeBytes: null,
-    notes: "Placeholder firmware release entry for MVP planning and UI flow.",
-    isActive: true,
-    createdAt: "2026-04-23T00:00:00.000Z",
-  },
-];
+const DEFAULT_FIRMWARE_CHANNEL = getDefaultFirmwareChannel();
+const FALLBACK_RELEASES: FirmwareReleaseRecord[] = Object.entries(
+  getFirmwareVersionCatalog(),
+).map(([board, version]) => ({
+  version,
+  channel: DEFAULT_FIRMWARE_CHANNEL,
+  board,
+  artifactUrl: `/firmware/releases/${version}/smart-shutter-${version}.bin`,
+  sha256:
+    "0000000000000000000000000000000000000000000000000000000000000000",
+  sizeBytes: null,
+  notes: `Placeholder ${board.toUpperCase()} firmware release entry for MVP planning and UI flow.`,
+  isActive: true,
+  createdAt: "2026-04-23T00:00:00.000Z",
+}));
 
 export class FirmwareReleaseError extends Error {
   statusCode: number;
@@ -131,8 +138,24 @@ function normalizeRequiredText(
   return value.trim();
 }
 
+function normalizeFirmwareVersion(value: unknown): string {
+  const version = normalizeRequiredText(value, "version");
+
+  if (!isValidFirmwareVersion(version)) {
+    throw new FirmwareReleaseError(
+      "The `version` field must be a valid semantic firmware version such as `0.1.1-dev-esp32`.",
+    );
+  }
+
+  return version;
+}
+
 function normalizeArtifactUrl(value: unknown): string {
   const artifactUrl = normalizeRequiredText(value, "artifactUrl");
+
+  if (artifactUrl.startsWith("/") && !artifactUrl.startsWith("//")) {
+    return artifactUrl;
+  }
 
   try {
     const parsedUrl = new URL(artifactUrl);
@@ -192,7 +215,7 @@ export function normalizeFirmwareReleaseInput(
   sizeBytes: number | null;
 } {
   return {
-    version: normalizeRequiredText(input.version, "version"),
+    version: normalizeFirmwareVersion(input.version),
     channel: normalizeRequiredText(input.channel, "channel", {
       defaultValue: DEFAULT_FIRMWARE_CHANNEL,
     }),
@@ -246,11 +269,33 @@ export async function getLatestFirmwareRelease(
   board = DEFAULT_FIRMWARE_BOARD,
 ): Promise<FirmwareReleaseRecord | null> {
   const releases = await listActiveFirmwareReleases();
-  return (
-    releases.find(
-      (release) => release.channel === channel && release.board === board,
-    ) ?? null
+  const matchingReleases = releases.filter(
+    (release) => release.channel === channel && release.board === board,
   );
+
+  if (matchingReleases.length === 0) {
+    return null;
+  }
+
+  return matchingReleases.reduce((bestRelease, candidateRelease) => {
+    const comparison = compareFirmwareVersions(
+      candidateRelease.version,
+      bestRelease.version,
+    );
+
+    if (comparison !== null && comparison > 0) {
+      return candidateRelease;
+    }
+
+    if (comparison === 0 || comparison === null) {
+      return Date.parse(candidateRelease.createdAt) >
+        Date.parse(bestRelease.createdAt)
+        ? candidateRelease
+        : bestRelease;
+    }
+
+    return bestRelease;
+  });
 }
 
 export async function createFirmwareCheckResponse(
@@ -268,7 +313,10 @@ export async function createFirmwareCheckResponse(
     deviceId: device.deviceId,
     currentVersion,
     latestVersion: latestRelease?.version ?? null,
-    updateAvailable: latestRelease !== null && currentVersion !== latestRelease.version,
+    updateAvailable: isFirmwareUpdateAvailable(
+      currentVersion,
+      latestRelease?.version ?? null,
+    ),
     board: latestRelease?.board ?? deviceBoard,
     channel,
     autoUpdateEnabled: device.otaAutoUpdateEnabled,
@@ -293,8 +341,10 @@ export async function createFirmwareManifestResponse(
   const deviceBoard = device.board ?? DEFAULT_FIRMWARE_BOARD;
   const latestRelease = await getLatestFirmwareRelease(channel, deviceBoard);
   const currentVersion = options?.currentVersion ?? device.firmwareVersion ?? null;
-  const updateAvailable =
-    latestRelease !== null && currentVersion !== latestRelease.version;
+  const updateAvailable = isFirmwareUpdateAvailable(
+    currentVersion,
+    latestRelease?.version ?? null,
+  );
 
   return {
     deviceId: device.deviceId,

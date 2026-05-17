@@ -15,14 +15,24 @@ const DEFAULT_NUDGE_AMOUNT = 2;
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(scriptPath), "..");
 const webPackageJsonPath = path.join(repoRoot, "apps", "web", "package.json");
+const firmwareVersionsPath = path.join(
+  repoRoot,
+  "apps",
+  "web",
+  "config",
+  "firmware-versions.json",
+);
 const webRequire = createRequire(webPackageJsonPath);
 const mqtt = webRequire("mqtt");
+const firmwareVersions = JSON.parse(fs.readFileSync(firmwareVersionsPath, "utf8"));
+const defaultMockFirmwareVersion =
+  firmwareVersions?.boards?.esp32 ?? "0.1.1-dev-esp32";
 
 loadEnvFiles();
 
 const args = parseArgs(process.argv.slice(2));
 const deviceId = args.deviceId ?? "shutter-dev-001";
-const firmwareVersion = args.firmwareVersion ?? "0.1.0-dev";
+const firmwareVersion = args.firmwareVersion ?? defaultMockFirmwareVersion;
 const commandTopic = `shutters/${deviceId}/commands`;
 const statusTopic = `shutters/${deviceId}/status`;
 

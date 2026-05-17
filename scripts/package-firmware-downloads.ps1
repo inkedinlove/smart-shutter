@@ -3,9 +3,17 @@ param()
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$syncScriptPath = Join-Path $repoRoot "scripts\sync-firmware-versions.mjs"
 $publicDownloadsDir = Join-Path $repoRoot "apps\web\public\downloads"
 $publicProvisioningAssetsDir = Join-Path $repoRoot "apps\web\public\provisioning-assets"
 $tempRoot = Join-Path $repoRoot ".tmp\firmware-download-packages"
+
+if (Test-Path $syncScriptPath) {
+  & node $syncScriptPath
+  if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+  }
+}
 
 function Reset-Directory {
   param(

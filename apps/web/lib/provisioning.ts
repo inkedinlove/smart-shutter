@@ -1,4 +1,5 @@
 import type { DeviceBoard, RegisteredDevice } from "@/lib/devices";
+import { getDefaultFirmwareVersion } from "@/lib/firmware-versioning";
 
 export type ProvisioningWifiMode = "factory" | "preconfigured";
 
@@ -26,11 +27,6 @@ export type ProvisioningDownloadInfo = {
   mainSketchFile: string;
   sketchDirName: string;
 };
-
-const DEFAULT_ESP32_FIRMWARE_VERSION = "0.1.0-dev";
-const DEFAULT_ESP8266_FIRMWARE_VERSION = "0.1.0-dev-esp8266";
-const DEFAULT_ESP8266_D1D4_FIRMWARE_VERSION = "0.1.0-dev-esp8266-d1d4";
-const DEFAULT_ESP8266_SERVO_FIRMWARE_VERSION = "0.1.0-dev-esp8266-servo";
 
 function toCString(value: string): string {
   return JSON.stringify(value);
@@ -123,7 +119,7 @@ export function normalizeProvisioningWifiInput(input: {
 
 function buildEsp8266Config(input: ProvisionedConfigInput): string {
   return buildEsp8266StepperConfig(input, {
-    firmwareVersion: DEFAULT_ESP8266_FIRMWARE_VERSION,
+    firmwareVersion: getDefaultFirmwareVersion("esp8266"),
     pinComment:
       "// Default pin map for NodeMCU-style ESP8266 boards:\n// D1=GPIO5, D2=GPIO4, D5=GPIO14, D6=GPIO12",
     in1: 5,
@@ -140,7 +136,7 @@ function buildEsp8266Config(input: ProvisionedConfigInput): string {
 
 function buildEsp8266D1D4Config(input: ProvisionedConfigInput): string {
   return buildEsp8266StepperConfig(input, {
-    firmwareVersion: DEFAULT_ESP8266_D1D4_FIRMWARE_VERSION,
+    firmwareVersion: getDefaultFirmwareVersion("esp8266-d1d4"),
     pinComment:
       "// Known-good D1/D2/D3/D4 stepper wiring from the working board sketch:\n// D1=GPIO5, D2=GPIO4, D3=GPIO0, D4=GPIO2",
     in1: 5,
@@ -279,7 +275,7 @@ constexpr const char* MQTT_CLIENT_ID = ${toCString(buildMqttClientId(input.devic
 
 // Device identity and topics provisioned from Smart Shutter.
 constexpr const char* DEVICE_ID = ${toCString(input.deviceId)};
-#define FIRMWARE_VERSION "${DEFAULT_ESP8266_SERVO_FIRMWARE_VERSION}"
+#define FIRMWARE_VERSION "${getDefaultFirmwareVersion("esp8266-servo")}"
 constexpr const char* COMMAND_TOPIC = ${toCString(input.commandTopic)};
 constexpr const char* STATUS_TOPIC = ${toCString(input.statusTopic)};
 
@@ -358,7 +354,7 @@ constexpr const char* MQTT_CLIENT_ID = ${toCString(buildMqttClientId(input.devic
 
 // Device identity and topics provisioned from Smart Shutter.
 constexpr const char* DEVICE_ID = ${toCString(input.deviceId)};
-#define FIRMWARE_VERSION "${DEFAULT_ESP32_FIRMWARE_VERSION}"
+#define FIRMWARE_VERSION "${getDefaultFirmwareVersion("esp32")}"
 constexpr const char* COMMAND_TOPIC = ${toCString(input.commandTopic)};
 constexpr const char* STATUS_TOPIC = ${toCString(input.statusTopic)};
 

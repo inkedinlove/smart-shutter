@@ -16,7 +16,15 @@ const registryPath = path.join(
   "devices",
   "devices.json",
 );
+const firmwareVersionsPath = path.join(
+  process.cwd(),
+  "apps",
+  "web",
+  "config",
+  "firmware-versions.json",
+);
 const registry = JSON.parse(fs.readFileSync(registryPath, "utf8"));
+const firmwareVersions = JSON.parse(fs.readFileSync(firmwareVersionsPath, "utf8"));
 const device = registry.devices.find((entry) => entry.deviceId === deviceIdArg);
 
 if (!device) {
@@ -66,6 +74,10 @@ const otaEnabled =
   (device.board ?? "esp32") === "esp32" ||
   (device.board ?? "esp32") === "esp8266-d1d4";
 const sosEnabled = (device.board ?? "esp32") === "esp32";
+const firmwareVersion =
+  firmwareVersions?.boards?.[device.board ?? "esp32"] ??
+  firmwareVersions?.boards?.esp32 ??
+  "0.1.1-dev-esp32";
 
 const output = [
   "#pragma once",
@@ -84,7 +96,7 @@ const output = [
   "",
   "// Per-device cloud identity",
   `constexpr const char* DEVICE_ID = "${device.deviceId}";`,
-  '#define FIRMWARE_VERSION "0.1.0-dev"',
+  `#define FIRMWARE_VERSION "${firmwareVersion}"`,
   `constexpr const char* MQTT_HOST = "${mqttHost}";`,
   `constexpr int MQTT_PORT = ${mqttPort};`,
   'constexpr const char* MQTT_USERNAME = "PASTE_USERNAME";',

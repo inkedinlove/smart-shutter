@@ -1,8 +1,20 @@
+import fs from "node:fs";
+
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 const isInternalTestMode =
   process.env.INTERNAL_TEST_MODE?.trim().toLowerCase() === "true";
+const firmwareVersions = JSON.parse(
+  fs.readFileSync(
+    new URL("../config/firmware-versions.json", import.meta.url),
+    "utf8",
+  ),
+);
+const defaultEsp32Version =
+  firmwareVersions?.boards?.esp32 ?? "0.1.1-dev-esp32";
+const defaultEsp32ArtifactPath =
+  `/firmware/releases/${defaultEsp32Version}/smart-shutter-${defaultEsp32Version}.bin`;
 
 async function main() {
   const demoProfile = isInternalTestMode
@@ -52,12 +64,12 @@ async function main() {
 
   await prisma.firmwareRelease.upsert({
     where: {
-      version: "0.1.0-dev",
+      version: defaultEsp32Version,
     },
     update: {
       channel: "stable",
       board: "esp32",
-      artifactUrl: "https://example.com/firmware/smart-shutter-0.1.0-dev.bin",
+      artifactUrl: defaultEsp32ArtifactPath,
       sha256:
         "0000000000000000000000000000000000000000000000000000000000000000",
       sizeBytes: null,
@@ -65,10 +77,10 @@ async function main() {
       isActive: true,
     },
     create: {
-      version: "0.1.0-dev",
+      version: defaultEsp32Version,
       channel: "stable",
       board: "esp32",
-      artifactUrl: "https://example.com/firmware/smart-shutter-0.1.0-dev.bin",
+      artifactUrl: defaultEsp32ArtifactPath,
       sha256:
         "0000000000000000000000000000000000000000000000000000000000000000",
       sizeBytes: null,
