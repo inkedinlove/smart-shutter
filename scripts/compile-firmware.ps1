@@ -71,6 +71,67 @@ if (-not (Test-Path $configPath)) {
   Write-Host "Update config.h with real WiFi and MQTT values before flashing hardware." -ForegroundColor Yellow
 }
 
+function Test-PlaceholderConfigValues {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ConfigPath
+  )
+
+  $configSource = Get-Content -LiteralPath $ConfigPath -Raw
+  $placeholderChecks = @(
+    @{
+      Label = "WIFI_SSID"
+      Pattern = 'YOUR_WIFI_SSID'
+    }
+    @{
+      Label = "WIFI_PASSWORD"
+      Pattern = 'YOUR_WIFI_PASSWORD'
+    }
+    @{
+      Label = "MQTT_HOST"
+      Pattern = 'YOUR_HIVEMQ_HOST'
+    }
+    @{
+      Label = "MQTT_USERNAME"
+      Pattern = 'YOUR_HIVEMQ_USERNAME'
+    }
+    @{
+      Label = "MQTT_PASSWORD"
+      Pattern = 'YOUR_HIVEMQ_PASSWORD'
+    }
+    @{
+      Label = "API_BASE_URL"
+      Pattern = 'https://your-app\.example\.com'
+    }
+    @{
+      Label = "DEVICE_ID"
+      Pattern = 'shutter-dev-001'
+    }
+    @{
+      Label = "COMMAND_TOPIC"
+      Pattern = 'shutters/shutter-dev-001/commands'
+    }
+    @{
+      Label = "STATUS_TOPIC"
+      Pattern = 'shutters/shutter-dev-001/status'
+    }
+  )
+
+  $offendingFields = @()
+  foreach ($check in $placeholderChecks) {
+    if ($configSource -match $check.Pattern) {
+      $offendingFields += $check.Label
+    }
+  }
+
+  if ($offendingFields.Count -gt 0) {
+    $fields = ($offendingFields | Sort-Object -Unique) -join ", "
+    throw "config.h still contains placeholder/example values for: $fields`nUpdate $relativeConfigPath with the real per-device settings before compiling."
+  }
+}
+
+Test-PlaceholderConfigValues -ConfigPath $configPath
+
 New-Item -ItemType Directory -Force -Path $resolvedOutputDir | Out-Null
 
 $compileArgs = @(

@@ -35,6 +35,26 @@ const boardFiles = {
   ],
 };
 
+const boardSketchDirs = {
+  esp32: "esp32-shutter",
+  esp8266: "esp8266-shutter",
+  "esp8266-d1d4": "esp8266-d1d4-shutter",
+  "esp8266-servo": "esp8266-servo-shutter",
+};
+
+for (const [board, files] of Object.entries(boardFiles)) {
+  const configPath = path.join(
+    repoRoot,
+    "firmware",
+    boardSketchDirs[board],
+    "config.h",
+  );
+
+  if (fs.existsSync(configPath)) {
+    files.unshift(configPath);
+  }
+}
+
 function replaceFirmwareVersion(source, version, filePath) {
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
   let replaced = false;
